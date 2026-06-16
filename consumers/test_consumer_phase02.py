@@ -1001,26 +1001,28 @@ def run_animal_detection(
             display,
         )
 
-        bbox_csv_path = os.path.join(bbox_csv_dir, f"{stem}_bboxes.csv")
-        with open(bbox_csv_path, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                'frame_index', 'class_name', 'class_id', 'confidence',
-                'track_id', 'x1', 'y1', 'x2', 'y2', 'capture_ts',
-            ])
-            for row in rows:
-                writer.writerow([
-                    row[3],  # frame_index
-                    row[4],  # class_name
-                    row[5],  # class_id
-                    row[6],  # confidence
-                    row[7],  # track_id
-                    row[8],  # x1
-                    row[9],  # y1
-                    row[10], # x2
-                    row[11], # y2
-                    row[1],  # capture_ts
-                ])
+        bbox_csv_headers = [
+            'frame_index', 'class_name', 'class_id', 'confidence',
+            'track_id', 'x1', 'y1', 'x2', 'y2', 'capture_ts',
+        ]
+        static_bbox_csv = os.path.join(bbox_csv_dir, "bboxes.csv")
+        with _csv_lock:
+            dated_bbox_csv = _get_daily_csv_path(static_bbox_csv, bbox_csv_headers)
+            with open(dated_bbox_csv, 'a', newline='') as f:
+                writer = csv.writer(f)
+                for row in rows:
+                    writer.writerow([
+                        row[3],  # frame_index
+                        row[4],  # class_name
+                        row[5],  # class_id
+                        row[6],  # confidence
+                        row[7],  # track_id
+                        row[8],  # x1
+                        row[9],  # y1
+                        row[10], # x2
+                        row[11], # y2
+                        row[1],  # capture_ts
+                    ])
 
     cv2.putText(
         display, f"Animals: {detection_count}",
@@ -1090,21 +1092,23 @@ def run_head_count(
         cv2.imwrite(os.path.join(raw_frames_dir, f"{stem}_raw.jpg"), frame)
         cv2.imwrite(os.path.join(ann_frames_dir, f"{stem}_ann.jpg"), display)
 
-        bbox_csv_path = os.path.join(bbox_csv_dir, f"{stem}_bboxes.csv")
-        with open(bbox_csv_path, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                'frame_index', 'confidence', 'x1', 'y1', 'x2', 'y2',
-            ])
-            if results[0].boxes is not None:
-                for box in results[0].boxes:
-                    if float(box.conf[0]) >= HC_CONF_THRESH:
-                        hx1, hy1, hx2, hy2 = [int(c) for c in box.xyxy[0]]
-                        writer.writerow([
-                            frame_index,
-                            f"{float(box.conf[0]):.4f}",
-                            hx1, hy1, hx2, hy2,
-                        ])
+        bbox_csv_headers = [
+            'frame_index', 'confidence', 'x1', 'y1', 'x2', 'y2',
+        ]
+        static_bbox_csv = os.path.join(bbox_csv_dir, "bboxes.csv")
+        with _csv_lock:
+            dated_bbox_csv = _get_daily_csv_path(static_bbox_csv, bbox_csv_headers)
+            with open(dated_bbox_csv, 'a', newline='') as f:
+                writer = csv.writer(f)
+                if results[0].boxes is not None:
+                    for box in results[0].boxes:
+                        if float(box.conf[0]) >= HC_CONF_THRESH:
+                            hx1, hy1, hx2, hy2 = [int(c) for c in box.xyxy[0]]
+                            writer.writerow([
+                                frame_index,
+                                f"{float(box.conf[0]):.4f}",
+                                hx1, hy1, hx2, hy2,
+                            ])
 
     # ── FPS tracking (post-warmup) ────────────────────────────────────────────
     if not warmup_fps_tracker.get('warmup_done') and frame_index >= HC_WARMUP_FRAMES:
@@ -1342,18 +1346,20 @@ def run_entry_exit(
             cv2.imwrite(os.path.join(raw_frames_dir, f"{stem}_raw.jpg"), frame)
             cv2.imwrite(os.path.join(ann_frames_dir, f"{stem}_ann.jpg"), display)
 
-            bbox_csv_path = os.path.join(bbox_csv_dir, f"{stem}_bboxes.csv")
-            with open(bbox_csv_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    'frame_index', 'track_id', 'event',
-                    'x1', 'y1', 'x2', 'y2',
-                ])
-                writer.writerow([
-                    frame_index, tid, event,
-                    int(tlwh[0]), int(tlwh[1]),
-                    int(tlwh[0] + tlwh[2]), int(tlwh[1] + tlwh[3]),
-                ])
+            bbox_csv_headers = [
+                'frame_index', 'track_id', 'event',
+                'x1', 'y1', 'x2', 'y2',
+            ]
+            static_bbox_csv = os.path.join(bbox_csv_dir, "bboxes.csv")
+            with _csv_lock:
+                dated_bbox_csv = _get_daily_csv_path(static_bbox_csv, bbox_csv_headers)
+                with open(dated_bbox_csv, 'a', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        frame_index, tid, event,
+                        int(tlwh[0]), int(tlwh[1]),
+                        int(tlwh[0] + tlwh[2]), int(tlwh[1] + tlwh[3]),
+                    ])
 
         dx1 = int(tlwh[0] * sx)
         dy1 = int(tlwh[1] * sy)
