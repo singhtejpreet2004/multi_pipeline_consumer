@@ -2,7 +2,7 @@
 """
 Kafka Producer — dr2_gf_dining_cam_2 (DR2-DC2)
 Topic   : video.raw.dr2_dc2
-RTSP    : rtsp://admin1:Plaksha%402025123@10.1.34.249:554/cam/realmonitor?channel=1&subtype=1
+RTSP    : rtsp://$RTSP_CAM_USER:$RTSP_CAM_PASS@10.1.34.249:554/cam/realmonitor?channel=1&subtype=1
 Brokers : 10.1.40.43:9092, 10.1.40.44:9093, 10.1.40.45:9094
 Message : 8-byte big-endian uint64 (nanoseconds) + JPEG bytes
 FIXES   : stderr suppressed on FFmpeg | safe subprocess shutdown
@@ -14,13 +14,15 @@ import struct
 import sys
 import time
 import logging
+import os
 
 import cv2
 import numpy as np
 from kafka import KafkaProducer
 
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
-RTSP_URL          = "rtsp://admin1:Plaksha%402025123@10.1.34.249:554/cam/realmonitor?channel=1&subtype=1"
+# RTSP URL assembled from environment variables RTSP_CAM_USER and RTSP_CAM_PASS
+RTSP_URL          = f"rtsp://{os.environ['RTSP_CAM_USER']}:{os.environ['RTSP_CAM_PASS']}@10.1.34.249:554/cam/realmonitor?channel=1&subtype=1"
 KAFKA_BROKERS     = "10.1.40.43:9092,10.1.40.44:9093,10.1.40.45:9094"
 TOPIC_NAME        = "video.raw.dr2_dc2"
 WIDTH             = 640
