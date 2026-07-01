@@ -32,7 +32,7 @@ graph TD
     K{Apache Kafka Broker}:::kafka
 
     subgraph GPU Server NVIDIA L40S
-        Consumer[test_consumer_phase02.py]:::consumer
+        Consumer[consumer.py]:::consumer
         T1((Thread 1))
         T2((Thread 2))
         TN((Thread N))
@@ -80,8 +80,10 @@ The repository is organized into specific domains to maintain separation of conc
 | `consumers/` | The core intelligence engine. Contains scripts that pull from Kafka, manage GPU semaphores, and run ML inferences. | [Read More](consumers/README.md) |
 | `producers/` | Lightweight ingestion scripts that connect to RTSP streams and push buffered frames to Kafka topics. | [Read More](producers/README.md) |
 | `miscellaneous/` | Essential operational bash scripts for deployment, backups (`rsync`), and old output cleanup. | [Read More](miscellaneous/README.md) |
+| `scripts/` | Entry-point scripts for starting producers and the consumer in production. | [Read More](scripts/README.md) |
+| `archive/` | Retired consumer iterations kept for rollback reference only. | [Read More](archive/README.md) |
+| `docs/` | Project governance docs (branching, versioning) and supplementary documentation. | [Read More](docs/README.md) |
 | `tests/` | Automated unit tests utilizing extensive mocking to run GPU logic on CI/CD CPU environments. | [Read More](tests/README.md) |
-| `frame_saving_docs/`| Handover documentation requested by the ML team regarding frame-saving standards. | [Read More](frame_saving_docs/README.md) |
 | `output/` *(Ignored)* | Automatically generated directory containing saved frames, bounding box CSVs, and videos. | N/A |
 | `logs/` *(Ignored)* | Runtime logging output from the daemons. | N/A |
 
@@ -103,13 +105,13 @@ The system is deployed using `nohup` to ensure it continues running even if the 
 **Step A: Start Producers**  
 *(To start specific cameras, run their respective bash scripts)*
 ```bash
-nohup ./miscellaneous/run_producers.sh > logs/producers_master.log 2>&1 &
+nohup ./scripts/run_producers.sh > logs/producers_master.log 2>&1 &
 ```
 
 **Step B: Start the Multi-Pipeline Consumer**  
-*(Currently using `test_consumer_phase02.py` as the production standard)*
+*(Currently using `consumer.py` as the production standard)*
 ```bash
-nohup python consumers/test_consumer_phase02.py > logs/nohup_consumer.log 2>&1 &
+nohup python consumers/consumer.py > logs/nohup_consumer.log 2>&1 &
 ```
 
 ---
@@ -162,4 +164,4 @@ bash miscellaneous/setup_rsync_cron.sh
 ## 🤝 Code Standards & Best Practices
 
 - **Never Commit Output/Logs:** The `.gitignore` file explicitly blocks `output/`, `logs/`, and `.pt` model files. **Do not bypass this.** Doing so will crash the GitHub repository due to file size limits.
-- **Resource Locking:** Since the consumer is highly multi-threaded, always respect the `_pytorch_sem`, `_tf_sem`, and `_csv_lock` semaphores when writing new pipeline logic to prevent GPU Out-Of-Memory (OOM) errors and race conditions.
+- **Resource Locking:** Since the consumer is highly multi-threaded, always respect the `_pytorch_sem` and `_tf_sem` semaphores when writing new pipeline logic to prevent GPU Out-Of-Memory (OOM) errors and race conditions. Bbox CSV writes no longer use a separate `_csv_lock`.

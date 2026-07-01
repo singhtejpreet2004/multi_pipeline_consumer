@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Project Is
 
-A Kafka-driven, multi-threaded real-time video analytics pipeline deployed on an NVIDIA L40S GPU server. Producers ingest RTSP camera streams and publish encoded frames to Kafka. One consumer (`consumers/test_consumer_phase02.py`) spawns a daemon thread per camera and runs three concurrent ML pipelines per frame: Animal Detection (YOLOv8m + BotSORT), Head Count (YOLOv8 + BotSORT), and Entry/Exit (YOLOv5 + DeepSort + TF ReID). A Flask-SocketIO dashboard streams annotated frames to a browser at port 8675.
+A Kafka-driven, multi-threaded real-time video analytics pipeline deployed on an NVIDIA L40S GPU server. Producers ingest RTSP camera streams and publish encoded frames to Kafka. One consumer (`consumers/consumer.py`) spawns a daemon thread per camera and runs three concurrent ML pipelines per frame: Animal Detection (YOLOv8m + BotSORT), Head Count (YOLOv8 + BotSORT), and Entry/Exit (YOLOv5 + DeepSort + TF ReID). A Flask-SocketIO dashboard streams annotated frames to a browser at port 8675.
 
 ## Environment
 
@@ -22,10 +22,10 @@ Production runs on a remote GPU server (10.1.41.56) with CUDA, PyTorch, and Tens
 
 ```bash
 # Start all producers
-nohup ./miscellaneous/run_producers.sh > logs/producers_master.log 2>&1 &
+nohup ./scripts/run_producers.sh > logs/producers_master.log 2>&1 &
 
 # Start the consumer (production standard)
-nohup python consumers/test_consumer_phase02.py > logs/nohup_consumer.log 2>&1 &
+nohup python consumers/consumer.py > logs/nohup_consumer.log 2>&1 &
 
 # Monitor
 tail -f logs/nohup_consumer.log
@@ -46,7 +46,7 @@ pytest tests/test_frame_saving.py -v
 pytest tests/test_frame_saving.py::test_animal_detection_frame_saving -v
 ```
 
-Tests mock GPU/CUDA calls and import directly from `consumers/test_consumer_phase02`. They are designed to run on CPU-only CI environments — no GPU required.
+Tests mock GPU/CUDA calls and import directly from `consumers/consumer`. They are designed to run on CPU-only CI environments — no GPU required.
 
 ## Critical Architecture Constraints
 
@@ -90,17 +90,17 @@ CSV files are date-stamped via `_get_daily_csv_path()` — midnight rotation is 
 
 | File | Status |
 |---|---|
-| `consumers/test_consumer_phase02.py` | Production — current standard |
-| `consumers/test_consumer_phase2.py`, `phase1.py`, `test_consumer.py` | Archived iterations — rollback only |
-| `consumers/test_daily_csv_rotation.py` | Utility for manual CSV rotation enforcement |
+| `consumers/consumer.py` | Production — current standard |
+| `archive/consumer_v0.py`, `consumer_v0_phase1.py`, `consumer_v0_phase2.py` | Archived iterations — rollback only |
+| `miscellaneous/daily_csv_rotation.py` | Utility for manual CSV rotation enforcement |
 | `producers/producer_*.py` | One script per camera, all structurally identical |
-| `miscellaneous/run_producers.sh` | Starts all producers |
+| `scripts/run_producers.sh` | Starts all producers |
 | `miscellaneous/setup_rsync_cron.sh` | Configures daily CSV rsync to HPC cluster |
 | `miscellaneous/cleanup_old_output.sh` | Prunes old output directories |
 
 ## Camera Registry
 
-`CAMERA_REGISTRY` in `test_consumer_phase02.py` is the single source of truth for camera topology. Each entry maps a Kafka topic → output folder name → camera IP → which pipelines (AN/HC/EE) are enabled. Adding a camera requires adding an entry here and creating a corresponding producer script.
+`CAMERA_REGISTRY` in `consumer.py` is the single source of truth for camera topology. Each entry maps a Kafka topic → output folder name → camera IP → which pipelines (AN/HC/EE) are enabled. Adding a camera requires adding an entry here and creating a corresponding producer script.
 
 ## Dashboard
 

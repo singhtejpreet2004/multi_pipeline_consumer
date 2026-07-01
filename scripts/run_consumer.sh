@@ -7,7 +7,7 @@
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 VENV_PATH="/data/Entry_Exit/ee-venv"
-CONSUMER_SCRIPT="/data/multi_pipeline_consumer/consumers/test_consumer_phase02.py"
+CONSUMER_SCRIPT="/data/multi_pipeline_consumer/consumers/consumer.py"
 LOG_DIR="/data/multi_pipeline_consumer/logs"
 RESTART_DELAY=10 # seconds to wait before restarting consumer on crash
 SESSION_TS=$(date +%Y%m%d_%H%M%S)

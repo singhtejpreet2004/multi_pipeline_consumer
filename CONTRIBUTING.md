@@ -5,13 +5,13 @@ This document is the enforceable rulebook for working in this repository. It is 
 ## Before you branch
 
 1. Pull latest `develop`.
-2. Branch using `feature/<area>/<short-desc>` or `hotfix/<short-desc>` — see [branching-commit-strategy.md] for full rules.
+2. Branch using `feature/<area>/<short-desc>` or `hotfix/<short-desc>` — see [docs/branching-commit-strategy.md] for full rules.
 3. Areas: `producer`, `consumer`, `docs`, `ci`, `infra`.
 
 ## Commit messages
 
 Use Conventional Commits: `<type>: <short summary>`.
-Types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`. Full reference in [branching-commit-strategy.md].
+Types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`. Full reference in [docs/branching-commit-strategy.md].
 
 ## Before opening a PR
 
@@ -30,7 +30,7 @@ Any new package import must be added to `requirements.txt` in the same PR that i
 
 ## Versioning
 
-This project uses `vMAJOR.MINOR.PATCH`. See `versioning-scheme.md` for exact bump rules. Contributors don't need to assign version numbers themselves — that happens at release-cut time (Phase 6 process) — but commit type (`feat`/`fix`/etc.) directly determines what that future version bump will be, so get the type right.
+This project uses `vMAJOR.MINOR.PATCH`. See `docs/versioning-scheme.md` for exact bump rules. Contributors don't need to assign version numbers themselves — that happens at release-cut time (Phase 6 process) — but commit type (`feat`/`fix`/etc.) directly determines what that future version bump will be, so get the type right.
 
 ## Documentation placement — quick reference
 
