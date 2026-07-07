@@ -1,0 +1,77 @@
+# =============================================================================
+# Plaksha Streams — Production Requirements
+# Environment: ee-venv on GPU server (10.1.41.56, NVIDIA L40, CUDA 12.8)
+# Python: 3.11
+# Generated from: pip freeze on ee-venv, 2026-07
+# Install: pip install -r requirements.txt
+# =============================================================================
+#
+# NOTE — Non-pip prerequisites (must exist on server manually):
+#   1. DeepSort + ReID model:  /data/Entry_Exit/              (Entry/Exit pipeline)
+#   2. YOLOv8 Animal model:    /data/Animal_Detection/*.pt    (Animal Detection pipeline)
+#   3. YOLOv8 Head Count model:/data/Head_count/*.pt          (Head Count pipeline)
+#   4. .env file at repo root with RTSP_CAM_USER, RTSP_CAM_PASS
+#
+# These are not pip-installable. A new deployment must set them up manually.
+# =============================================================================
+
+
+# --- ML / Inference Frameworks -----------------------------------------------
+# PyTorch with CUDA 12.8 — Animal Detection + Head Count pipelines
+torch==2.8.0+cu128
+torchvision==0.23.0+cu128
+torchaudio==2.8.0+cu128
+
+# TensorFlow — Entry/Exit pipeline
+tensorflow==2.18.0
+
+# YOLO models — Animal Detection + Head Count inference
+ultralytics==8.3.20
+
+
+# --- Computer Vision ---------------------------------------------------------
+opencv-python==4.12.0.88
+
+
+# --- Object Tracking ---------------------------------------------------------
+# DeepSort tracker — Entry/Exit pipeline
+deep-sort-realtime==1.3.2
+
+# LAP solver — required by DeepSort for assignment
+lapx==0.5.11.post1
+
+
+# --- Kafka / Streaming -------------------------------------------------------
+kafka-python==2.2.11
+
+
+# --- Web Dashboard -----------------------------------------------------------
+# Flask + SocketIO — live annotated frame streaming at port 8675
+Flask==3.1.1
+Flask-SocketIO==5.5.1
+
+
+# --- Data Handling -----------------------------------------------------------
+numpy==2.0.2
+pandas==3.0.1
+
+
+# --- GPU / System Monitoring -------------------------------------------------
+# pynvml — GPU memory monitoring and semaphore sizing
+nvidia-ml-py3==7.352.0
+
+# GPUtil — GPU utilisation reporting
+GPUtil==1.4.0
+
+# psutil — system-level process and memory monitoring
+psutil==7.0.0
+
+
+# =============================================================================
+# ⚠️  NEVER INSTALL OR IMPORT: eventlet
+# -----------------------------------------------------------------------------
+# eventlet is present in ee-venv (eventlet==0.38.2) but causes a fatal
+# segfault when combined with CUDA/PyTorch. The consumer has a hard guard
+# that kills the process on import. Do not add it here. Do not import it.
+# See CLAUDE.md — "Critical Runtime Constraints" for full explanation.
+# =============================================================================

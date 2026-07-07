@@ -1,0 +1,17 @@
+# =============================================================================
+# Plaksha Streams — Development Requirements
+# For local development and CI only — do NOT install on the GPU server
+# Install: pip install -r requirements-dev.txt
+# =============================================================================
+
+# --- Testing -----------------------------------------------------------------
+pytest==8.3.5
+pytest-cov==6.1.0          # coverage reports
+
+# --- Linting / Formatting ----------------------------------------------------
+ruff==0.11.13              # fast linter + formatter, replaces flake8+black
+
+# =============================================================================
+# NOTE: Production dependencies live in requirements.txt
+# This file is for dev tooling only.
+# =============================================================================
