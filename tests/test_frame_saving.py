@@ -37,12 +37,12 @@ def test_animal_detection_frame_saving(mock_dirs):
     mock_model.track.return_value = [mock_results]
     
     try:
-        from consumers.test_consumer_phase02 import run_animal_detection
-        
-        with patch("consumers.test_consumer_phase02._pytorch_sem"), \
-             patch("consumers.test_consumer_phase02.torch.no_grad"), \
-             patch("consumers.test_consumer_phase02.torch.cuda.synchronize"), \
-             patch("consumers.test_consumer_phase02._csv_lock"):
+        from consumers.consumer import run_animal_detection
+
+        with patch("consumers.consumer._pytorch_sem"), \
+             patch("consumers.consumer.torch.no_grad"), \
+             patch("consumers.consumer.torch.cuda.synchronize"), \
+             patch("consumers.consumer._csv_lock"):
             
             run_animal_detection(
                 topic="test_topic",
