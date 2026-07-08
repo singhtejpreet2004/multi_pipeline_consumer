@@ -87,6 +87,12 @@ The repository is organized into specific domains to maintain separation of conc
 | `output/` *(Ignored)* | Automatically generated directory containing saved frames, bounding box CSVs, and videos. | N/A |
 | `logs/` *(Ignored)* | Runtime logging output from the daemons. | N/A |
 
+> [!NOTE]
+> `ES` and `ec` at the repo root are untracked, non-functional artifacts (three stray `local=''`
+> lines and an empty file, respectively) — believed to be shell-redirection typos from a past
+> session, not part of the codebase. Kept as-is per maintainer decision; do not treat as config or
+> code.
+
 ---
 
 ## 🚀 Production Deployment Guide

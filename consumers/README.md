@@ -1,30 +1,233 @@
-# Consumer Module
+# `consumers/`
 
-This directory contains the central intelligence engine of the pipeline. The consumers connect to Kafka topics, pull incoming video frames, and process them through the Machine Learning pipelines.
+The intelligence core of the pipeline. One script — `consumer.py` — connects to Kafka,
+pulls encoded video frames per camera, and runs three concurrent ML pipelines
+(Animal Detection, Head Count, Entry/Exit) on an NVIDIA L40S GPU. Results are written to
+disk (CSV + annotated video) and streamed live to a browser dashboard.
 
-## Scripts Overview
+> **For non-technical readers:** this is the "brain" of the system. It watches
+> live camera feeds, counts people and detects animals, tracks who enters/exits
+> gated areas, and shows all of it on a live web dashboard. Everything else in
+> this repo (`producers/`, `scripts/`) exists to feed data into this directory.
 
-- **`test_consumer_phase02.py`**: The current **Production** script. It handles multi-threading (one thread per camera), dashboard streaming via Flask-SocketIO, and runs the 3 concurrent ML pipelines.
-- **`test_consumer_phase2.py` / `test_consumer_phase1.py` / `test_consumer.py`**: Older iterations of the pipeline kept for archival/rollback purposes.
-- **`test_daily_csv_rotation.py`**: A utility script used to enforce daily rotation logic for the tracking CSVs.
+---
 
-## The Architecture of `phase02`
+## Contents
 
-### Multi-Threading
-The script uses `threading.Thread` to spawn an isolated processing loop for each camera defined in the `CAMERA_REGISTRY`. This ensures that a laggy camera or broken stream does not halt the entire system.
+| File | Status | Purpose |
+|---|---|---|
+| `consumer.py` | **Production** | Multi-threaded Kafka consumer, 3 ML pipelines, Flask-SocketIO dashboard |
+| `README.md` | Current | This file |
+| `__pycache__/` | Generated | Python bytecode cache — gitignored, ignore |
 
-### GPU Memory Management (The Semaphores)
-Because we are running multiple heavy YOLO models across several camera threads concurrently on a single NVIDIA L40S GPU, memory must be strictly managed to prevent Out-Of-Memory (OOM) crashes.
+Older iterations (`consumer_v0*.py`) live in [`../archive/`](../archive/README.md), not here — kept for rollback only, not run in production.
 
-We utilize two primary semaphores:
-- `_pytorch_sem = threading.Semaphore(3)`: Limits the system to 3 concurrent PyTorch (YOLOv8/BotSORT) inferences at any given microsecond.
-- `_tf_sem = threading.Semaphore(1)`: Limits the system to 1 concurrent TensorFlow (ReID) inference, as TF tends to aggressively pre-allocate GPU memory.
+---
 
-### Frame Saving Feature
-Implemented by request from the ML team, the consumer automatically saves positive-detection frames to disk.
-When an event triggers (e.g., an animal is detected, or a person enters a zone), the script writes three artifacts:
-1. A raw `.jpg` frame.
-2. An annotated `.jpg` frame.
-3. An isolated bounding-box `.csv`.
+## Architecture
 
-*(For more details on frame saving, see `/frame_saving_docs/Frame_Saving_Handover.md`)*.
+```mermaid
+flowchart TD
+    subgraph Kafka["Kafka Cluster (3 brokers)"]
+        T1["video.raw.g1_ol"]
+        T2["video.raw.g1_me"]
+        TN["... 10 topics total"]
+    end
+
+    subgraph Consumer["consumer.py — one process"]
+        direction TB
+        M["main thread\nloads EE ROI config\nspawns camera threads\nruns Flask-SocketIO server"]
+        subgraph CamThread["process_feed() — one daemon thread per camera"]
+            direction TB
+            DP["detect_dominant_partition()\ndelta-check, 3.5s window"]
+            KC["KafkaConsumer\nper-camera group_id\nseek_to_end, max_poll_records=1"]
+            DEC["decode frame\nstrip 8-byte ts header\nJPEG -> ndarray"]
+            LAG{"lag > 54 frames?"}
+            TP["seek_to_end\nteleport to live edge"]
+            AN["Animal Detection\nYOLOv8m + BotSORT\n_pytorch_sem"]
+            HC["Head Count\nYOLOv8 + BotSORT\n_pytorch_sem"]
+            EE["Entry / Exit\nYOLOv5 + DeepSort + TF ReID\n_tf_sem"]
+            AVI["write annotated frame to .avi\nrotate every 18,000 frames"]
+            PUB["publish_frame()\nJPEG encode -> base64 -> socketio.emit"]
+            COMMIT["commit Kafka offset\nevery 10 frames"]
+        end
+        DP --> KC --> DEC --> LAG
+        LAG -- yes --> TP --> DEC
+        LAG -- no --> AN --> HC --> EE --> AVI --> PUB --> COMMIT --> DEC
+    end
+
+    subgraph GPU["NVIDIA L40S — 48GB VRAM"]
+        SEM1["_pytorch_sem\nSemaphore(3)"]
+        SEM2["_tf_sem\nSemaphore(2)"]
+    end
+
+    subgraph Disk["/data/multi_pipeline_consumer/output/<camera>/"]
+        CSV["csv/ — detections, stats, buckets"]
+        RAW["raw_frames/ + annotated_frames/"]
+        BBOX["bbox_csv/"]
+        VID["inference/ — rotating .avi"]
+    end
+
+    subgraph Browser["Dashboard client"]
+        WS["Socket.IO — polling transport\nhttp://0.0.0.0:8675"]
+    end
+
+    T1 & T2 & TN --> KC
+    AN -.acquire/release.-> SEM1
+    HC -.acquire/release.-> SEM1
+    EE -.acquire/release.-> SEM2
+    AN --> CSV & RAW & BBOX
+    HC --> CSV & RAW & BBOX
+    EE --> CSV & RAW & BBOX
+    AVI --> VID
+    PUB --> WS
+```
+
+---
+
+## Dependencies
+
+```mermaid
+flowchart LR
+    subgraph Repo["This repository"]
+        PROD["producers/producer_*.py\n(one script per camera, must be running)"]
+        ENV[".env\n(RTSP_CAM_USER / RTSP_CAM_PASS)"]
+        FSDOC["docs/others/Frame_saving_documentation/\nFrame_Saving_Handover.md"]
+    end
+
+    subgraph Server["GPU server — 10.1.41.56 (not in git)"]
+        VENV["ee-venv\nPyTorch 2.8.0+cu128 · TensorFlow 2.18.0"]
+        AN["/data/Animal_Detection/\nbest.pt · botsort.yaml"]
+        HC["/data/Head_count/\nyolov8-3b2-100_200.pt"]
+        EE["/data/Entry_Exit/\nyolov5m.pt · mars-small128.pb\ncamera_config.json · deep_sort/"]
+        OUT["/data/multi_pipeline_consumer/output/\n(writable output root)"]
+    end
+
+    CONSUMER["consumers/consumer.py"]
+
+    PROD -- "Kafka topics\nvideo.raw.*" --> CONSUMER
+    ENV -.-> PROD
+    FSDOC -.->|background reading| CONSUMER
+    VENV --> CONSUMER
+    AN --> CONSUMER
+    HC --> CONSUMER
+    EE --> CONSUMER
+    CONSUMER --> OUT
+```
+
+`CAMERA_REGISTRY` in `consumer.py` (lines 185–196) is the single source of truth mapping Kafka topic → output folder → camera IP → enabled pipelines. Adding a camera means adding an entry here **and** a matching producer script.
+
+---
+
+## Technical Specs
+
+### Kafka / consumer tuning
+
+| Parameter | Value | Notes |
+|---|---|---|
+| Brokers | `10.1.40.43:9092,10.1.40.44:9093,10.1.40.45:9094` | 3-broker cluster |
+| Topic naming | `video.raw.<camera_code>` | e.g. `video.raw.g1_ol` |
+| Consumer group ID | `mlp_{topic.replace('.','_')}` | **Per-camera** — never shared, prevents rebalance cascades |
+| `group_instance_id` (static membership) | Not set | `kafka-python` 2.x raises `KafkaConfigurationError` if passed — disabled intentionally |
+| `auto_offset_reset` | `latest` | New consumer groups start at live edge, not history |
+| `enable_auto_commit` | `False` | Manual commits only |
+| `COMMIT_EVERY_N_FRAMES` | `10` | Max data loss on crash = 10 frames |
+| `session_timeout_ms` | `15000` | Down from 60s in Phase 1 — faster crash detection |
+| `heartbeat_interval_ms` | `3000` | Down from 20s |
+| `max_poll_records` | `1` | One frame per poll — no batch accumulation |
+| `max_poll_interval_ms` | `600000` | 10 min — generous, GPU inference can stall briefly |
+| `fetch_max_bytes` | `52428800` (50MB) | |
+| Dominant partition detection | Delta-check, 1.5s→3.5s snapshot window | Selects partition with active growth, not highest absolute offset — avoids dead historical partitions |
+| Lag teleport threshold | `MAX_LAG_FRAMES = 54` (~3s at 18 FPS) | Beyond this, `seek_to_end()` instead of catching up frame-by-frame |
+| Thread stagger on startup | 3s between camera threads | Prevents simultaneous partition-detection queries from saturating broker metadata API |
+
+### GPU concurrency
+
+| Semaphore | Value | Gates |
+|---|---|---|
+| `_pytorch_sem` | `Semaphore(3)` | Animal Detection + Head Count (YOLOv8/BotSORT) |
+| `_tf_sem` | `Semaphore(2)` | Entry/Exit (YOLOv5 + TF ReID encoder) |
+
+Tuned for L40S 48GB VRAM. PyTorch and TF run in isolated lanes to avoid cross-framework CUDA context interference. `torch.cuda.synchronize()` is called before releasing `_pytorch_sem` — without it, the semaphore wouldn't actually gate GPU execution (a new thread could submit a kernel while the GPU is still busy).
+
+### Frame format
+
+| Item | Value |
+|---|---|
+| Producer message | `struct.pack(">Q", int(time.time() * 1e9)) + jpeg_bytes` |
+| Consumer unpack | `ts_ns = struct.unpack('>Q', msg.value[:8])[0]`; frame = `msg.value[8:]` |
+| Working resolution | `FRAME_W=640 x FRAME_H=360` |
+| Entry/Exit resolution | `EE_WIDTH=1024 x EE_HEIGHT=576` — ROI polygons in `camera_config.json` are calibrated to this, do not change without re-drawing ROIs |
+| Video output | `.avi`, XVID codec, 18.0 FPS, rotates every `MAX_FRAMES_PER_AVI=18000` frames (~16 min) — prevents OpenCV container corruption on long-running files |
+
+### Pipeline thresholds
+
+| Pipeline | Confidence | Model | Tracker | Notes |
+|---|---|---|---|---|
+| Animal Detection (AN) | `0.45` | YOLOv8m, `imgsz=1280`, `half=True` | BotSORT (`botsort.yaml`) | Classes: `[0]` (animal) |
+| Head Count (HC) | `0.30` | YOLOv8, `imgsz=640`, `half=True` | BotSORT | Classes: `[0]` (person). Bucketed avg written every `HC_INTERVAL_SEC=10s` |
+| Entry/Exit (EE) | `0.45` | YOLOv5m | DeepSort + TF ReID (`mars-small128.pb`) | `max_cosine_dist=0.3`, `max_age=30`, `n_init=3`, `max_iou_dist=0.7`, batch size `4`, direction lookback `8` frames, dot-product threshold `3.0`, CSV flush every `300s` |
+
+### Output layout
+
+```
+/data/multi_pipeline_consumer/output/<camera_folder>/
+    animal_detection/{csv,inference,raw_frames,annotated_frames,bbox_csv}/
+    head_count/{csv,inference,raw_frames,annotated_frames,bbox_csv}/
+    entry_exit/{csv,inference,raw_frames,annotated_frames,bbox_csv}/
+```
+
+- CSVs are date-stamped via `_get_daily_csv_path()` — automatic midnight rotation, no cron needed.
+- Frame filenames: `frame_{index:08d}_{YYYYMMDD_HHMMSS_uSec}_{raw|ann}.jpg`.
+- Frame-saving triggers only on positive detections (AN: any animal; HC: head_count > 0; EE: entry/exit event) — not every frame. See [`../docs/others/Frame_saving_documentation/Frame_Saving_Handover.md`](../docs/others/Frame_saving_documentation/Frame_Saving_Handover.md) for the original handover doc.
+
+### Dashboard
+
+| Item | Value |
+|---|---|
+| URL | `http://0.0.0.0:8675` |
+| Transport | Socket.IO **polling only** (`transports: ['polling'], upgrade: false`) — Werkzeug dev server in threading mode does not support WebSocket upgrades; this was previously causing HTTP 500s on every reconnect |
+| `async_mode` | `'threading'` — required for CUDA safety, do not change to `eventlet` or `gevent` |
+| Snapshot endpoint | `GET /snapshot/<topic>` — latest JPEG as still image |
+| Emit event | `frame` — `{cam, img (base64 JPEG), ts}`, room-scoped per camera topic |
+
+---
+
+## Critical constraints (production incidents — do not revert)
+
+| Constraint | Why |
+|---|---|
+| No `eventlet` — guarded by `assert` at import time | `eventlet.monkey_patch()` caused SIGSEGV (exit 139) with CUDA/TF on this system |
+| `async_mode='threading'` for SocketIO | Same CUDA-safety reason; WebSocket upgrade sacrificed for it |
+| Per-camera Kafka `group_id` | Shared group IDs caused rebalance cascades that killed all camera threads simultaneously |
+| `torch.cuda.synchronize()` before releasing `_pytorch_sem` | Without it, semaphore doesn't actually gate concurrent GPU kernel submission |
+| AVI rotation every 18,000 frames | Long-running single files were corrupting (an 8.5GB frozen video was the trigger incident) |
+| Dominant partition via delta-check, not absolute offset | Absolute-offset selection was picking dead historical partitions — the "6 dead cameras" bug |
+
+---
+
+## How to Use
+
+```bash
+source venv/bin/activate          # local dev; production uses ee-venv on the GPU server
+
+# Start (production standard)
+nohup python consumers/consumer.py > logs/nohup_consumer.log 2>&1 &
+
+# Monitor
+tail -f logs/nohup_consumer.log
+
+# Stop gracefully — allows offset commits + CSV flush to complete
+kill -15 <PID>
+# kill -9 only as last resort
+```
+
+Dashboard: `http://<server-ip>:8675`
+
+---
+
+## Known limitations / TODO markers in code
+
+- `SKIP_FRAMES = 1` is a static no-op today; a comment marks it for a future dynamic lag-based skip (Phase 3, not yet implemented).
+- EE pipeline runs without ROI gating (full-frame) if a camera's IP has no entry in `camera_config.json` — logged as a warning, not a hard failure.
+- GPU utilization logging (via `pynvml`) is best-effort; failures leave the `gpu_utilization_pct` CSV column empty rather than crashing the thread.

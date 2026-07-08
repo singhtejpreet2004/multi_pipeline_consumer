@@ -46,7 +46,12 @@ pytest tests/test_frame_saving.py -v
 pytest tests/test_frame_saving.py::test_animal_detection_frame_saving -v
 ```
 
-Tests mock GPU/CUDA calls and import directly from `consumers/consumer`. They are designed to run on CPU-only CI environments — no GPU required.
+Tests mock GPU/CUDA calls and import directly from `consumers/consumer`. `tests/conftest.py` stubs
+the `/data/Entry_Exit` DeepSort imports so the module can be imported off the production server.
+Real pip dependencies from `requirements.txt` (numpy, opencv, torch, tensorflow, ultralytics,
+flask-socketio, pynvml, kafka-python) still must be installed — no GPU hardware is required, but the
+packages themselves are not mocked. No CI workflow is currently configured in this repo
+(no `.github/workflows/`); tests are run manually.
 
 ## Critical Architecture Constraints
 
@@ -92,11 +97,12 @@ CSV files are date-stamped via `_get_daily_csv_path()` — midnight rotation is 
 |---|---|
 | `consumers/consumer.py` | Production — current standard |
 | `archive/consumer_v0.py`, `consumer_v0_phase1.py`, `consumer_v0_phase2.py` | Archived iterations — rollback only |
-| `miscellaneous/daily_csv_rotation.py` | Utility for manual CSV rotation enforcement |
+| `miscellaneous/daily_csv_rotation.py` | Standalone offline test of consumer.py's CSV rotation logic — not a production utility |
 | `producers/producer_*.py` | One script per camera, all structurally identical |
 | `scripts/run_producers.sh` | Starts all producers |
-| `miscellaneous/setup_rsync_cron.sh` | Configures daily CSV rsync to HPC cluster |
-| `miscellaneous/cleanup_old_output.sh` | Prunes old output directories |
+| `miscellaneous/setup_rsync_cron.sh` | Configures CSV-only rsync (every 1 min) to HPC cluster |
+| `miscellaneous/cleanup_old_output.sh` | Prunes old output files once backed up |
+| `miscellaneous/maintenance_backup.sh` | Manual ad-hoc backup of output/logs before risky changes — stops producers/consumer first |
 
 ## Camera Registry
 

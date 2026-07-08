@@ -1,5 +1,5 @@
 # Frame Saving Feature — Deployment Handover
-**Target Script:** `consumers/test_consumer_phase02.py`
+**Target Script:** `consumers/consumer.py` (renamed from `test_consumer_phase02.py` during the Phase 2 repo restructure)
 **Date:** June 2026
 
 ## Overview
@@ -20,4 +20,5 @@ The directory structure for output now automatically generates the following sub
 Isolated testing for the file writing mechanism has been successfully implemented in `tests/test_frame_saving.py`. These tests verify that the `datetime.now()` strings are correctly formatted and that all 3 artifacts (`raw`, `ann`, `bboxes`) are generated atomically without breaking the pipeline.
 
 ## Handover Status
-The feature has been committed to the `script_changes_frames` branch and is ready for production merge.
+The feature was committed via the `script_changes_frames` branch, since merged and deleted — this
+doc is retained for historical context only. Current implementation lives in `consumers/consumer.py`.
