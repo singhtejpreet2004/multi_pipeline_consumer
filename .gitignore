@@ -27,4 +27,3 @@ output/
 
 # Environment secrets — never commit
 .env
-.env.*

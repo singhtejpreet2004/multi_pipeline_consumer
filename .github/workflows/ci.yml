@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dev dependencies (ruff)
+        run: pip install -r requirements-dev.txt
+
+      # ruff format --check excluded — existing codebase predates ruff
+      # formatting standards. Add back after a dedicated formatting pass.
+      - name: Ruff lint
+        run: ruff check consumers/ producers/ tests/ miscellaneous/
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        # requirements.txt is NOT installed — torch/tensorflow are pinned to
+        # CUDA builds (+cu128) and will not resolve on a CPU-only CI runner.
+        # requirements-ci.txt provides CPU-compatible equivalents.
+        run: |
+          pip install -r requirements-dev.txt
+          pip install -r requirements-ci.txt
+
+      - name: Run tests
+        env:
+          RTSP_CAM_USER: dummy_user
+          RTSP_CAM_PASS: dummy_pass
+        run: pytest tests/ -v

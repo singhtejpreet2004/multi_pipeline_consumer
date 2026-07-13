@@ -95,6 +95,29 @@ The repository is organized into specific domains to maintain separation of conc
 
 ---
 
+## 🔧 Technical Specifications
+
+| Parameter | Value | Notes |
+|---|---|---|
+| `_pytorch_sem` | `Semaphore(3)` | Gates Animal Detection + Head Count (PyTorch/YOLOv8) |
+| `_tf_sem` | `Semaphore(2)` | Gates Entry/Exit (TensorFlow ReID) |
+| `MAX_LAG_FRAMES` | `54` | Beyond this, consumer teleports via `seek_to_end()` instead of catching up frame-by-frame |
+| `MAX_FRAMES_PER_AVI` | `18000` | AVI rotates every ~16 minutes to prevent OpenCV container corruption |
+| Partition detection window | `1.5s` (docstring) / `3.5s` (actual sleep) | Docstring is stale — actual behaviour is 3.5s per `time.sleep()`, line 294. See `consumers/README.md` |
+| Producer output resolution | `640×480` | `WIDTH`/`HEIGHT` in all producer scripts, piped from FFmpeg |
+| Consumer working resolution | `640×360` | `FRAME_W`/`FRAME_H` in `consumer.py` line 120-121, used for all ML inference |
+| JPEG quality | `95` | `cv2.IMWRITE_JPEG_QUALITY`, set in producer scripts |
+| FFmpeg transport | `tcp` | `-rtsp_transport tcp`, forces TCP over UDP for reliability |
+| Kafka `acks` | `0` | Fire-and-forget — occasional dropped frame tolerable for video |
+| Kafka `linger_ms` | `5` | Client-side send buffering only, not frame batching |
+| Dashboard port | `8675` | Flask-SocketIO, `PORT = 8675` in `consumer.py` |
+| AVI codec | `XVID` | `cv2.VideoWriter_fourcc(*'XVID')` |
+| Frame timeout | `5.0s` | Producer `FRAME_TIMEOUT_SEC` — triggers FFmpeg pipe restart if no frame received |
+| Restart delay (producer, inner) | `2s` | Producer `RESTART_DELAY_SEC` before relaunching a stalled FFmpeg subprocess |
+| Kafka message format | 8-byte big-endian nanosecond timestamp prefix + JPEG bytes | `struct.pack(">Q", int(time.time() * 1e9)) + jpeg_bytes` |
+
+---
+
 ## 🚀 Production Deployment Guide
 
 This system runs primarily via background Unix daemons. Below is the standard operating procedure for deploying, running, and stopping the pipelines in production.
@@ -170,4 +193,4 @@ bash miscellaneous/setup_rsync_cron.sh
 ## 🤝 Code Standards & Best Practices
 
 - **Never Commit Output/Logs:** The `.gitignore` file explicitly blocks `output/`, `logs/`, and `.pt` model files. **Do not bypass this.** Doing so will crash the GitHub repository due to file size limits.
-- **Resource Locking:** Since the consumer is highly multi-threaded, always respect the `_pytorch_sem` and `_tf_sem` semaphores when writing new pipeline logic to prevent GPU Out-Of-Memory (OOM) errors and race conditions. Bbox CSV writes no longer use a separate `_csv_lock`.
+- **Resource Locking:** Since the consumer is highly multi-threaded, always respect the `_pytorch_sem` and `_tf_sem` semaphores when writing new pipeline logic to prevent GPU Out-Of-Memory (OOM) errors and race conditions. Bbox CSV writes still use `_csv_lock` (confirmed at 3 call sites in `consumer.py`: lines 983, 1144, 1388) — do not remove it without verifying thread-safety of concurrent CSV writes.

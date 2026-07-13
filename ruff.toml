@@ -1,0 +1,6 @@
+[lint]
+ignore = [
+    "E402",  # intentional — sys.path.insert() before DeepSort imports
+              # in consumers/consumer.py must precede those imports
+    "E701",  # existing code style — deferred to Phase 9 formatting pass
+]
