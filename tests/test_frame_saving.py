@@ -1,6 +1,4 @@
 import os
-import csv
-import cv2
 import numpy as np
 import pytest
 from unittest.mock import patch, MagicMock
