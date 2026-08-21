@@ -216,9 +216,14 @@ def test_entry_exit_no_image_storage(mock_dirs):
 
 def test_no_active_video_or_image_writer_code():
     """
-    Static guard: video/image storage must stay disabled. Fails if any
-    non-commented line in consumer.py contains an active cv2.VideoWriter(),
-    video_writer.write(), or cv2.imwrite( call.
+    Static guard: the general/permanent video and image storage disabled in
+    the storage overhaul must stay disabled. Fails if any non-commented line
+    in consumer.py contains an active `video_writer = cv2.VideoWriter(`,
+    `video_writer.write(`, or `cv2.imwrite(` call.
+
+    Deliberately does NOT ban bare `cv2.VideoWriter(` — the TEMPORARY GTA-Exp
+    raw-footage capture (see consumers/README.md, remove after 2026-08-28)
+    legitimately uses its own separately-named `gta_writer = cv2.VideoWriter(`.
     """
     consumer_path = os.path.join(
         os.path.dirname(__file__), "..", "consumers", "consumer.py"
@@ -226,7 +231,11 @@ def test_no_active_video_or_image_writer_code():
     with open(consumer_path) as f:
         lines = f.readlines()
 
-    banned_patterns = ("cv2.VideoWriter(", "video_writer.write(", "cv2.imwrite(")
+    banned_patterns = (
+        "video_writer = cv2.VideoWriter(",
+        "video_writer.write(",
+        "cv2.imwrite(",
+    )
 
     for line in lines:
         stripped = line.strip()

@@ -67,7 +67,7 @@ import threading
 import time
 import warnings
 from collections import deque
-from datetime import datetime, timezone
+from datetime import date, datetime, time as dt_time, timezone
 
 # ── Third-party ───────────────────────────────────────────────────────────────
 import cv2
@@ -168,6 +168,28 @@ PORT = 8675
 # Higher = more potential replay on crash but less I/O.
 # 10 is the correct balance for this pipeline.
 COMMIT_EVERY_N_FRAMES = 10
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TEMPORARY: Ground-Truth Analysis raw footage capture (GTA-Exp)
+# Added 2026-08-21 for gate-camera model ground-truth verification.
+# DELETE this entire block (and its call site in process_feed) after
+# 2026-08-28 — see consumers/README.md's GTA-Exp section for context.
+# Hard date cutoff below means it goes silent on its own after the 28th
+# even if this isn't removed in time.
+# ──────────────────────────────────────────────────────────────────────────────
+GTA_EXP_CAMERAS = {
+    'gate_1_outside_left', 'gate_1_main_entry',
+    'gate_2_entry_camera', 'gate_2_exit_camera',
+}
+GTA_EXP_DIR        = os.path.join(BASE_OUTPUT_DIR, 'GTA-Exp')
+GTA_EXP_START_DATE = date(2026, 8, 22)
+GTA_EXP_END_DATE   = date(2026, 8, 28)
+GTA_EXP_WINDOWS = [
+    (dt_time(9, 0),  dt_time(10, 0), '0900-1000'),
+    (dt_time(14, 30), dt_time(15, 30), '1430-1530'),
+    (dt_time(19, 0), dt_time(20, 0), '1900-2000'),
+]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -841,6 +863,76 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
 
 
+def gta_exp_active_window(dt: datetime) -> tuple[date, str] | None:
+    """
+    TEMPORARY (GTA-Exp, remove after 2026-08-28): return (date, window_label)
+    if dt falls inside an active GTA-Exp capture window, else None. Windows
+    are half-open [start, end).
+    """
+    if not (GTA_EXP_START_DATE <= dt.date() <= GTA_EXP_END_DATE):
+        return None
+    t = dt.time()
+    for start, end, label in GTA_EXP_WINDOWS:
+        if start <= t < end:
+            return (dt.date(), label)
+    return None
+
+
+class GtaExpRecorder:
+    """
+    TEMPORARY (GTA-Exp, remove after 2026-08-28): manages one gate camera's
+    raw-footage capture window lifecycle — opens/writes/closes the AVI as
+    frames arrive, one instance per camera thread.
+
+    The filename includes `session_ts` (stamped once at construction, i.e.
+    once per consumer process start) so that a restart mid-window opens a
+    new file instead of truncating/overwriting the prior session's footage
+    for that same date+window.
+    """
+
+    def __init__(self, folder: str, log: logging.Logger):
+        self.folder = folder
+        self.log = log
+        self.session_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self._writer = None
+        self._current_window = None
+
+    def update(self, frame: np.ndarray, now: datetime) -> None:
+        """Call once per frame. Opens/writes/closes the AVI as needed."""
+        window = gta_exp_active_window(now)
+        if window is None:
+            self._close()
+            return
+        if self._writer is None or self._current_window != window:
+            self._close()
+            self._open(window)
+        self._writer.write(frame)
+
+    def _open(self, window: tuple[date, str]) -> None:
+        gta_date, gta_label = window
+        cam_dir = os.path.join(GTA_EXP_DIR, self.folder)
+        os.makedirs(cam_dir, exist_ok=True)
+        path = os.path.join(
+            cam_dir,
+            f"{self.folder}_{gta_date:%Y%m%d}_{gta_label}_{self.session_ts}.avi",
+        )
+        self._writer = cv2.VideoWriter(
+            path,
+            cv2.VideoWriter_fourcc(*'XVID'),
+            18.0,
+            (FRAME_W, FRAME_H),
+        )
+        self._current_window = window
+        self.log.info("[GTA-Exp] Recording window opened: %s", path)
+
+    def _close(self) -> None:
+        if self._writer is not None:
+            self._writer.release()
+            self._writer = None
+            self._current_window = None
+            self.log.info("[GTA-Exp] Recording window closed for %s", self.folder)
+
+
 def _get_daily_csv_path(static_path: str, headers: list) -> str:
     """
     Return a date-stamped CSV path for today derived from static_path.
@@ -1444,6 +1536,10 @@ def process_feed(cam_cfg: dict):
     log = logging.getLogger(topic)
     log.info("Thread starting — AN=%s HC=%s EE=%s", run_AN, run_HC, run_EE)
 
+    # TEMPORARY (GTA-Exp, remove after 2026-08-28): only constructed for the
+    # 4 gate cameras; None (and skipped every frame) for every other camera.
+    gta_recorder = GtaExpRecorder(folder, log) if folder in GTA_EXP_CAMERAS else None
+
     # ── Per-camera Kafka group identifiers (FIX-P2-2) ──────────────────────────
     # group_id: Each camera is an independent consumer group.
     #   Crash/restart of one camera has zero effect on others.
@@ -1706,6 +1802,10 @@ def process_feed(cam_cfg: dict):
 
             frame   = cv2.resize(frame, (FRAME_W, FRAME_H))
             display = frame.copy()
+
+            # ── TEMPORARY: GTA-Exp raw footage capture (remove after 2026-08-28) ──
+            if gta_recorder is not None:
+                gta_recorder.update(frame, datetime.now())
 
             # ── FIX-E2: VIDEO ROTATION LOGIC ──────────────────────────────────
             # Storage overhaul: video storage disabled entirely.
