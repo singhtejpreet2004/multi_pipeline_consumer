@@ -137,7 +137,7 @@ AN_WARMUP_FRAMES  = 3
 HC_WARMUP_FRAMES  = 3
 
 # ── Limiters & Optimization (FIX-E2 & FIX-E3) ─────────────────────────────────
-MAX_FRAMES_PER_AVI = 18000  # Rotate AVI every ~16 minutes to prevent corruption
+# MAX_FRAMES_PER_AVI = 18000  # Storage overhaul: video storage disabled, AVI rotation unused.
 MAX_LAG_FRAMES     = 54     # Drop frames if consumer falls >54 frames (~3s) behind
 
 # ── Head Count CSV interval ───────────────────────────────────────────────────
@@ -158,7 +158,9 @@ EE_CSV_INTERVAL_SEC = 300
 PORT = 8675
 
 # ── Save annotated video ──────────────────────────────────────────────────────
-SAVE_VIDEO = True
+# Storage overhaul: video storage disabled entirely — only CSV metadata is
+# persisted now (raw_frames/annotated_frames JPEGs and AVI video removed).
+# SAVE_VIDEO = True
 
 # ── Offset commit frequency (FIX-P2-6) ───────────────────────────────────────
 # Commit the consumer offset every N successfully processed frames.
@@ -988,18 +990,19 @@ def run_animal_detection(
             ]), 'a', newline='') as f:
                 csv.writer(f).writerows(rows)
 
-        ts_tag   = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-        stem     = f"frame_{frame_index:08d}_{ts_tag}"
-
-        cv2.imwrite(
-            os.path.join(raw_frames_dir, f"{stem}_raw.jpg"),
-            frame,
-        )
-
-        cv2.imwrite(
-            os.path.join(ann_frames_dir, f"{stem}_ann.jpg"),
-            display,
-        )
+        # Storage overhaul: raw/annotated JPEG storage disabled — CSV-only output.
+        # ts_tag   = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        # stem     = f"frame_{frame_index:08d}_{ts_tag}"
+        #
+        # cv2.imwrite(
+        #     os.path.join(raw_frames_dir, f"{stem}_raw.jpg"),
+        #     frame,
+        # )
+        #
+        # cv2.imwrite(
+        #     os.path.join(ann_frames_dir, f"{stem}_ann.jpg"),
+        #     display,
+        # )
 
         bbox_csv_headers = [
             'frame_index', 'class_name', 'class_id', 'confidence',
@@ -1085,11 +1088,12 @@ def run_head_count(
                 cv2.rectangle(display, (hx1, hy1), (hx2, hy2), (255, 0, 255), 1)
 
     if head_count > 0:
-        ts_tag = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-        stem   = f"frame_{frame_index:08d}_{ts_tag}"
-
-        cv2.imwrite(os.path.join(raw_frames_dir, f"{stem}_raw.jpg"), frame)
-        cv2.imwrite(os.path.join(ann_frames_dir, f"{stem}_ann.jpg"), display)
+        # Storage overhaul: raw/annotated JPEG storage disabled — CSV-only output.
+        # ts_tag = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        # stem   = f"frame_{frame_index:08d}_{ts_tag}"
+        #
+        # cv2.imwrite(os.path.join(raw_frames_dir, f"{stem}_raw.jpg"), frame)
+        # cv2.imwrite(os.path.join(ann_frames_dir, f"{stem}_ann.jpg"), display)
 
         bbox_csv_headers = [
             'frame_index', 'confidence', 'x1', 'y1', 'x2', 'y2',
@@ -1338,11 +1342,12 @@ def run_entry_exit(
                     )
 
         if event in ('ENTRY', 'EXIT'):
-            ts_tag = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-            stem   = f"frame_{frame_index:08d}_{ts_tag}_{event}"
-
-            cv2.imwrite(os.path.join(raw_frames_dir, f"{stem}_raw.jpg"), frame)
-            cv2.imwrite(os.path.join(ann_frames_dir, f"{stem}_ann.jpg"), display)
+            # Storage overhaul: raw/annotated JPEG storage disabled — CSV-only output.
+            # ts_tag = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            # stem   = f"frame_{frame_index:08d}_{ts_tag}_{event}"
+            #
+            # cv2.imwrite(os.path.join(raw_frames_dir, f"{stem}_raw.jpg"), frame)
+            # cv2.imwrite(os.path.join(ann_frames_dir, f"{stem}_ann.jpg"), display)
 
             bbox_csv_headers = [
                 'frame_index', 'track_id', 'event',
@@ -1431,9 +1436,9 @@ def process_feed(cam_cfg: dict):
     run_HC     = cam_cfg['HC']
     run_EE     = cam_cfg['EE']
     cam_ip     = cam_cfg['ip']
-    # Stamped once at thread start — used in all AVI filenames for this session.
-    # Prevents part1.avi being overwritten when the process restarts.
-    session_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    # Storage overhaul: video storage disabled — session_ts was only used for
+    # AVI filenames, now unused (kept commented for context, not deleted).
+    # session_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     # Per-camera logger — all log lines tagged with topic name.
     log = logging.getLogger(topic)
@@ -1464,9 +1469,10 @@ def process_feed(cam_cfg: dict):
             'bbox_csv'    : os.path.join(cam_root, pipeline, 'bbox_csv'),
         }
         os.makedirs(dirs[pipeline]['csv'],        exist_ok=True)
-        os.makedirs(dirs[pipeline]['inference'],  exist_ok=True)
-        os.makedirs(dirs[pipeline]['raw_frames'], exist_ok=True)
-        os.makedirs(dirs[pipeline]['ann_frames'], exist_ok=True)
+        # Storage overhaul: these dirs no longer created — video/image storage disabled.
+        # os.makedirs(dirs[pipeline]['inference'],  exist_ok=True)
+        # os.makedirs(dirs[pipeline]['raw_frames'], exist_ok=True)
+        # os.makedirs(dirs[pipeline]['ann_frames'], exist_ok=True)
         os.makedirs(dirs[pipeline]['bbox_csv'],   exist_ok=True)
 
     # ── Initialise AN CSV ─────────────────────────────────────────────────────
@@ -1629,15 +1635,16 @@ def process_feed(cam_cfg: dict):
             backoff = min(backoff * 2, 30)
 
     # ── Video writer setup ────────────────────────────────────────────────────
-    video_writer = None
-    frames_in_current_file = 0
-    file_part_number = 1
-
-    vid_pipeline = (
-        'head_count'       if run_HC else
-        'animal_detection' if run_AN else
-        'entry_exit'
-    )
+    # Storage overhaul: video storage disabled entirely — see consumers/README.md.
+    # video_writer = None
+    # frames_in_current_file = 0
+    # file_part_number = 1
+    #
+    # vid_pipeline = (
+    #     'head_count'       if run_HC else
+    #     'animal_detection' if run_AN else
+    #     'entry_exit'
+    # )
 
     frame_count   = 0
     frames_since_commit = 0   # tracks frames processed since last offset commit
@@ -1701,30 +1708,27 @@ def process_feed(cam_cfg: dict):
             display = frame.copy()
 
             # ── FIX-E2: VIDEO ROTATION LOGIC ──────────────────────────────────
-            if SAVE_VIDEO:
-                # If we hit the frame limit, safely close the file to prevent OpenDML corruption
-                if video_writer is not None and frames_in_current_file >= MAX_FRAMES_PER_AVI:
-                    video_writer.release()
-                    video_writer = None
-                    log.info("Rotated video to part %d for %s", file_part_number + 1, topic)
-                    file_part_number += 1
-                    frames_in_current_file = 0
-
-                # Open a new file if needed.
-                # session_ts is stamped once per process start so that a
-                # restart never overwrites a previous session's part1.avi.
-                if video_writer is None:
-                    vid_path = os.path.join(
-                        dirs[vid_pipeline]['inference'],
-                        f"{folder}_annotated_{session_ts}_part{file_part_number}.avi",
-                    )
-                    video_writer = cv2.VideoWriter(
-                        vid_path,
-                        cv2.VideoWriter_fourcc(*'XVID'),
-                        18.0,
-                        (FRAME_W, FRAME_H),
-                    )
-                    log.info("AVI writer opened: %s", vid_path)
+            # Storage overhaul: video storage disabled entirely.
+            # if SAVE_VIDEO:
+            #     if video_writer is not None and frames_in_current_file >= MAX_FRAMES_PER_AVI:
+            #         video_writer.release()
+            #         video_writer = None
+            #         log.info("Rotated video to part %d for %s", file_part_number + 1, topic)
+            #         file_part_number += 1
+            #         frames_in_current_file = 0
+            #
+            #     if video_writer is None:
+            #         vid_path = os.path.join(
+            #             dirs[vid_pipeline]['inference'],
+            #             f"{folder}_annotated_{session_ts}_part{file_part_number}.avi",
+            #         )
+            #         video_writer = cv2.VideoWriter(
+            #             vid_path,
+            #             cv2.VideoWriter_fourcc(*'XVID'),
+            #             18.0,
+            #             (FRAME_W, FRAME_H),
+            #         )
+            #         log.info("AVI writer opened: %s", vid_path)
 
             video_ts_sec = frame_count / 18.0
 
@@ -1781,9 +1785,10 @@ def process_feed(cam_cfg: dict):
             )
 
             # ── Write to AVI ──────────────────────────────────────────────────
-            if video_writer:
-                video_writer.write(display)
-                frames_in_current_file += 1
+            # Storage overhaul: video storage disabled entirely.
+            # if video_writer:
+            #     video_writer.write(display)
+            #     frames_in_current_file += 1
 
             # ── Publish to dashboard ──────────────────────────────────────────
             publish_frame(topic, display, ts_sec)

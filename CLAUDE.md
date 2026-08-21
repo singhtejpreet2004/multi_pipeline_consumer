@@ -43,15 +43,16 @@ pytest tests/
 pytest tests/test_frame_saving.py -v
 
 # Run a single test
-pytest tests/test_frame_saving.py::test_animal_detection_frame_saving -v
+pytest tests/test_frame_saving.py::test_animal_detection_no_image_storage -v
 ```
 
 Tests mock GPU/CUDA calls and import directly from `consumers/consumer`. `tests/conftest.py` stubs
 the `/data/Entry_Exit` DeepSort imports so the module can be imported off the production server.
 Real pip dependencies from `requirements.txt` (numpy, opencv, torch, tensorflow, ultralytics,
 flask-socketio, pynvml, kafka-python) still must be installed — no GPU hardware is required, but the
-packages themselves are not mocked. No CI workflow is currently configured in this repo
-(no `.github/workflows/`); tests are run manually.
+packages themselves are not mocked. CI (`.github/workflows/ci.yml`) runs `ruff check` and this
+suite on Python 3.11 with CPU-only dependencies from `requirements-ci.txt` on every push/PR to
+`main`/`develop`.
 
 ## Critical Architecture Constraints
 
@@ -66,12 +67,17 @@ packages themselves are not mocked. No CI workflow is currently configured in th
 ## Consumer Lifecycle (`process_feed`)
 
 Each camera thread follows this sequence:
-1. Create output directories under `BASE_OUTPUT_DIR/<camera_folder>/<pipeline>/{csv,inference,raw_frames,annotated_frames,bbox_csv}/`
+1. Create output directories under `BASE_OUTPUT_DIR/<camera_folder>/<pipeline>/{csv,bbox_csv}/` — `inference/`, `raw_frames/`, and `annotated_frames/` are no longer created (storage overhaul, see below)
 2. Load ML models onto CUDA
 3. Run `detect_dominant_partition()` — a delta-based probe that finds the live Kafka partition (critical: avoids historical dead partitions)
 4. Assign consumer to dominant partition only and `seek_to_end`
-5. Process frames: decode JPEG from `msg.value[8:]` (first 8 bytes are big-endian nanosecond timestamp), run enabled pipelines, write AVI, publish to dashboard
-6. AVI rotates every 18,000 frames (FIX-E2) to prevent OpenCV container corruption
+5. Process frames: decode JPEG from `msg.value[8:]` (first 8 bytes are big-endian nanosecond timestamp), run enabled pipelines, publish to dashboard
+
+**Storage overhaul (permanent):** video (`.avi`) and raw/annotated JPEG image storage are
+disabled entirely — only CSV metadata (main per-pipeline CSV + `bbox_csv/bboxes.csv`) is written.
+The disabled code (AVI writer setup/rotation/write, all `cv2.imwrite` calls, and the now-unused
+directory creation) is commented out in place in `consumer.py`, not deleted — see
+`consumers/README.md` for the full list of call sites.
 
 ## Producer Message Format
 
@@ -84,12 +90,12 @@ Consumer unpacks: `ts_ns = struct.unpack('>Q', msg.value[:8])[0]`, frame bytes f
 All output is gitignored. On the GPU server:
 ```
 /data/multi_pipeline_consumer/output/<camera_folder>/
-    animal_detection/{csv,inference,raw_frames,annotated_frames,bbox_csv}/
-    head_count/{csv,inference,raw_frames,annotated_frames,bbox_csv}/
-    entry_exit/{csv,inference,raw_frames,annotated_frames,bbox_csv}/
+    animal_detection/{csv,bbox_csv}/
+    head_count/{csv,bbox_csv}/
+    entry_exit/{csv,bbox_csv}/
 ```
 
-CSV files are date-stamped via `_get_daily_csv_path()` — midnight rotation is automatic. Frame filenames follow `frame_{index:08d}_{YYYYMMDD_HHMMSS_uSec}_{raw|ann}.jpg`.
+CSV files are date-stamped via `_get_daily_csv_path()` — midnight rotation is automatic.
 
 ## File Roles
 

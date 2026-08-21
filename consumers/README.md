@@ -3,7 +3,8 @@
 The intelligence core of the pipeline. One script — `consumer.py` — connects to Kafka,
 pulls encoded video frames per camera, and runs three concurrent ML pipelines
 (Animal Detection, Head Count, Entry/Exit) on an NVIDIA L40S GPU. Results are written to
-disk (CSV + annotated video) and streamed live to a browser dashboard.
+disk as CSV metadata (video and raw/annotated JPEG image storage were disabled in the storage
+overhaul — see "Output layout" below) and streamed live to a browser dashboard.
 
 > **For non-technical readers:** this is the "brain" of the system. It watches
 > live camera feeds, counts people and detects animals, tracks who enters/exits
@@ -47,13 +48,12 @@ flowchart TD
             AN["Animal Detection\nYOLOv8m + BotSORT\n_pytorch_sem"]
             HC["Head Count\nYOLOv8 + BotSORT\n_pytorch_sem"]
             EE["Entry / Exit\nYOLOv5 + DeepSort + TF ReID\n_tf_sem"]
-            AVI["write annotated frame to .avi\nrotate every 18,000 frames"]
             PUB["publish_frame()\nJPEG encode -> base64 -> socketio.emit"]
             COMMIT["commit Kafka offset\nevery 10 frames"]
         end
         DP --> KC --> DEC --> LAG
         LAG -- yes --> TP --> DEC
-        LAG -- no --> AN --> HC --> EE --> AVI --> PUB --> COMMIT --> DEC
+        LAG -- no --> AN --> HC --> EE --> PUB --> COMMIT --> DEC
     end
 
     subgraph GPU["NVIDIA L40S — 48GB VRAM"]
@@ -63,9 +63,7 @@ flowchart TD
 
     subgraph Disk["/data/multi_pipeline_consumer/output/<camera>/"]
         CSV["csv/ — detections, stats, buckets"]
-        RAW["raw_frames/ + annotated_frames/"]
         BBOX["bbox_csv/"]
-        VID["inference/ — rotating .avi"]
     end
 
     subgraph Browser["Dashboard client"]
@@ -76,12 +74,14 @@ flowchart TD
     AN -.acquire/release.-> SEM1
     HC -.acquire/release.-> SEM1
     EE -.acquire/release.-> SEM2
-    AN --> CSV & RAW & BBOX
-    HC --> CSV & RAW & BBOX
-    EE --> CSV & RAW & BBOX
-    AVI --> VID
+    AN --> CSV & BBOX
+    HC --> CSV & BBOX
+    EE --> CSV & BBOX
     PUB --> WS
 ```
+
+> Video (`.avi`) and raw/annotated JPEG image storage were removed in the storage overhaul —
+> only `csv/` and `bbox_csv/` are written to disk now. See "Output layout" below.
 
 ---
 
@@ -158,7 +158,7 @@ Tuned for L40S 48GB VRAM. PyTorch and TF run in isolated lanes to avoid cross-fr
 | Consumer unpack | `ts_ns = struct.unpack('>Q', msg.value[:8])[0]`; frame = `msg.value[8:]` |
 | Working resolution | `FRAME_W=640 x FRAME_H=360` |
 | Entry/Exit resolution | `EE_WIDTH=1024 x EE_HEIGHT=576` — ROI polygons in `camera_config.json` are calibrated to this, do not change without re-drawing ROIs |
-| Video output | `.avi`, XVID codec, 18.0 FPS, rotates every `MAX_FRAMES_PER_AVI=18000` frames (~16 min) — prevents OpenCV container corruption on long-running files |
+| Video output | **Disabled** (storage overhaul) — was `.avi`, XVID codec, 18.0 FPS, rotating every 18,000 frames; the code is commented out in place in `consumer.py`, not deleted |
 
 ### Pipeline thresholds
 
@@ -172,14 +172,23 @@ Tuned for L40S 48GB VRAM. PyTorch and TF run in isolated lanes to avoid cross-fr
 
 ```
 /data/multi_pipeline_consumer/output/<camera_folder>/
-    animal_detection/{csv,inference,raw_frames,annotated_frames,bbox_csv}/
-    head_count/{csv,inference,raw_frames,annotated_frames,bbox_csv}/
-    entry_exit/{csv,inference,raw_frames,annotated_frames,bbox_csv}/
+    animal_detection/{csv,bbox_csv}/
+    head_count/{csv,bbox_csv}/
+    entry_exit/{csv,bbox_csv}/
 ```
 
+- **Storage overhaul (permanent):** video (`.avi`) and raw/annotated JPEG image storage are
+  disabled for every camera and pipeline — only CSV metadata is written now. The `inference/`,
+  `raw_frames/`, and `annotated_frames/` subfolders are no longer created at all. The disabled
+  code is commented out in place in `consumer.py` (not deleted) so it's easy to find and audit;
+  see the `cv2.imwrite`/`cv2.VideoWriter` call sites and the directory-creation block in
+  `process_feed()`.
 - CSVs are date-stamped via `_get_daily_csv_path()` — automatic midnight rotation, no cron needed.
-- Frame filenames: `frame_{index:08d}_{YYYYMMDD_HHMMSS_uSec}_{raw|ann}.jpg`.
-- Frame-saving triggers only on positive detections (AN: any animal; HC: head_count > 0; EE: entry/exit event) — not every frame. See [`../docs/others/Frame_saving_documentation/Frame_Saving_Handover.md`](../docs/others/Frame_saving_documentation/Frame_Saving_Handover.md) for the original handover doc.
+- The main per-pipeline CSV and `bbox_csv/bboxes.csv` are unaffected by the storage overhaul —
+  both still write on the same triggers as before (AN: any animal; HC: every frame for stats,
+  `head_count > 0` for bbox rows; EE: entry/exit event for bbox rows, 300s interval for the
+  summary CSV). See [`../docs/others/Frame_saving_documentation/Frame_Saving_Handover.md`](../docs/others/Frame_saving_documentation/Frame_Saving_Handover.md)
+  for the original frame-saving handover doc (historical — describes the now-disabled behavior).
 
 ### Dashboard
 
@@ -201,7 +210,7 @@ Tuned for L40S 48GB VRAM. PyTorch and TF run in isolated lanes to avoid cross-fr
 | `async_mode='threading'` for SocketIO | Same CUDA-safety reason; WebSocket upgrade sacrificed for it |
 | Per-camera Kafka `group_id` | Shared group IDs caused rebalance cascades that killed all camera threads simultaneously |
 | `torch.cuda.synchronize()` before releasing `_pytorch_sem` | Without it, semaphore doesn't actually gate concurrent GPU kernel submission |
-| AVI rotation every 18,000 frames | Long-running single files were corrupting (an 8.5GB frozen video was the trigger incident) |
+| AVI rotation every 18,000 frames *(historical — video storage now disabled)* | Long-running single files were corrupting (an 8.5GB frozen video was the trigger incident). No longer an active constraint since AVI writing was commented out in the storage overhaul, but recorded here in case video storage is ever re-enabled |
 | Dominant partition via delta-check, not absolute offset | Absolute-offset selection was picking dead historical partitions — the "6 dead cameras" bug |
 
 ---
