@@ -49,7 +49,6 @@ graph TD
 
     subgraph Outputs
         DB[(CSV Storage)]:::output
-        FS[Saved Frames raw/ann]:::output
         WS[Flask Web Dashboard]:::output
     end
 
@@ -65,7 +64,6 @@ graph TD
     K -->|Consumes batches| Consumer
     
     AN & HC & EE --> DB
-    AN & HC & EE --> FS
     Consumer --> WS
 ```
 
@@ -84,7 +82,7 @@ The repository is organized into specific domains to maintain separation of conc
 | `archive/` | Retired consumer iterations kept for rollback reference only. | [Read More](archive/README.md) |
 | `docs/` | Project governance docs (branching, versioning) and supplementary documentation. | [Read More](docs/README.md) |
 | `tests/` | Automated unit tests utilizing extensive mocking to run GPU logic on CI/CD CPU environments. | [Read More](tests/README.md) |
-| `output/` *(Ignored)* | Automatically generated directory containing saved frames, bounding box CSVs, and videos. | N/A |
+| `output/` *(Ignored)* | Automatically generated directory containing CSV metadata and bounding box CSVs. Video/image frame storage was disabled in the storage overhaul — see [`consumers/README.md`](consumers/README.md). | N/A |
 | `logs/` *(Ignored)* | Runtime logging output from the daemons. | N/A |
 
 > [!NOTE]
@@ -102,7 +100,7 @@ The repository is organized into specific domains to maintain separation of conc
 | `_pytorch_sem` | `Semaphore(3)` | Gates Animal Detection + Head Count (PyTorch/YOLOv8) |
 | `_tf_sem` | `Semaphore(2)` | Gates Entry/Exit (TensorFlow ReID) |
 | `MAX_LAG_FRAMES` | `54` | Beyond this, consumer teleports via `seek_to_end()` instead of catching up frame-by-frame |
-| `MAX_FRAMES_PER_AVI` | `18000` | AVI rotates every ~16 minutes to prevent OpenCV container corruption |
+| `MAX_FRAMES_PER_AVI` | *(commented out)* | Was `18000` — video storage is disabled in the storage overhaul; the constant and all AVI rotation logic are commented out in place, not deleted |
 | Partition detection window | `1.5s` (docstring) / `3.5s` (actual sleep) | Docstring is stale — actual behaviour is 3.5s per `time.sleep()`, line 294. See `consumers/README.md` |
 | Producer output resolution | `640×480` | `WIDTH`/`HEIGHT` in all producer scripts, piped from FFmpeg |
 | Consumer working resolution | `640×360` | `FRAME_W`/`FRAME_H` in `consumer.py` line 120-121, used for all ML inference |
@@ -111,7 +109,7 @@ The repository is organized into specific domains to maintain separation of conc
 | Kafka `acks` | `0` | Fire-and-forget — occasional dropped frame tolerable for video |
 | Kafka `linger_ms` | `5` | Client-side send buffering only, not frame batching |
 | Dashboard port | `8675` | Flask-SocketIO, `PORT = 8675` in `consumer.py` |
-| AVI codec | `XVID` | `cv2.VideoWriter_fourcc(*'XVID')` |
+| AVI codec | *(commented out)* | Was `XVID` — video storage disabled in the storage overhaul, see `consumers/README.md` |
 | Frame timeout | `5.0s` | Producer `FRAME_TIMEOUT_SEC` — triggers FFmpeg pipe restart if no frame received |
 | Restart delay (producer, inner) | `2s` | Producer `RESTART_DELAY_SEC` before relaunching a stalled FFmpeg subprocess |
 | Kafka message format | 8-byte big-endian nanosecond timestamp prefix + JPEG bytes | `struct.pack(">Q", int(time.time() * 1e9)) + jpeg_bytes` |
@@ -176,10 +174,13 @@ If you need to stop the pipelines (e.g., for an upgrade or maintenance):
 
 ## 🛠 File Output & Backups
 
-The system generates several artifacts during execution:
-- **Daily CSVs**: Stored in `output/<camera_name>/<pipeline>/csv/`.
-- **Saved Frames (Raw/Annotated)**: Triggered upon positive detections to train future models.
-- **Videos (.avi)**: Saved during inference intervals.
+The system generates the following artifacts during execution:
+- **Daily CSVs**: Stored in `output/<camera_name>/<pipeline>/{csv,bbox_csv}/`.
+
+> [!NOTE]
+> Raw/annotated frame images and `.avi` video storage were disabled in the storage overhaul —
+> CSV metadata (main CSV + bbox CSV) is the only artifact written to `output/` now. See
+> [`consumers/README.md`](consumers/README.md#output-layout) for details.
 
 ### Automated Backups
 We utilize cron jobs and `rsync` to back up all CSV data to an external HPC cluster daily.
