@@ -67,7 +67,7 @@ import threading
 import time
 import warnings
 from collections import deque
-from datetime import datetime, timezone
+from datetime import date, datetime, time as dt_time, timezone
 
 # ── Third-party ───────────────────────────────────────────────────────────────
 import cv2
@@ -137,7 +137,7 @@ AN_WARMUP_FRAMES  = 3
 HC_WARMUP_FRAMES  = 3
 
 # ── Limiters & Optimization (FIX-E2 & FIX-E3) ─────────────────────────────────
-MAX_FRAMES_PER_AVI = 18000  # Rotate AVI every ~16 minutes to prevent corruption
+# MAX_FRAMES_PER_AVI = 18000  # Storage overhaul: video storage disabled, AVI rotation unused.
 MAX_LAG_FRAMES     = 54     # Drop frames if consumer falls >54 frames (~3s) behind
 
 # ── Head Count CSV interval ───────────────────────────────────────────────────
@@ -158,7 +158,9 @@ EE_CSV_INTERVAL_SEC = 300
 PORT = 8675
 
 # ── Save annotated video ──────────────────────────────────────────────────────
-SAVE_VIDEO = True
+# Storage overhaul: video storage disabled entirely — only CSV metadata is
+# persisted now (raw_frames/annotated_frames JPEGs and AVI video removed).
+# SAVE_VIDEO = True
 
 # ── Offset commit frequency (FIX-P2-6) ───────────────────────────────────────
 # Commit the consumer offset every N successfully processed frames.
@@ -166,6 +168,28 @@ SAVE_VIDEO = True
 # Higher = more potential replay on crash but less I/O.
 # 10 is the correct balance for this pipeline.
 COMMIT_EVERY_N_FRAMES = 10
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TEMPORARY: Ground-Truth Analysis raw footage capture (GTA-Exp)
+# Added 2026-08-21 for gate-camera model ground-truth verification.
+# DELETE this entire block (and its call site in process_feed) after
+# 2026-08-28 — see consumers/README.md's GTA-Exp section for context.
+# Hard date cutoff below means it goes silent on its own after the 28th
+# even if this isn't removed in time.
+# ──────────────────────────────────────────────────────────────────────────────
+GTA_EXP_CAMERAS = {
+    'gate_1_outside_left', 'gate_1_main_entry',
+    'gate_2_entry_camera', 'gate_2_exit_camera',
+}
+GTA_EXP_DIR        = os.path.join(BASE_OUTPUT_DIR, 'GTA-Exp')
+GTA_EXP_START_DATE = date(2026, 8, 22)
+GTA_EXP_END_DATE   = date(2026, 8, 28)
+GTA_EXP_WINDOWS = [
+    (dt_time(9, 0),  dt_time(10, 0), '0900-1000'),
+    (dt_time(14, 30), dt_time(15, 30), '1430-1530'),
+    (dt_time(19, 0), dt_time(20, 0), '1900-2000'),
+]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -839,6 +863,76 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
 
 
+def gta_exp_active_window(dt: datetime) -> tuple[date, str] | None:
+    """
+    TEMPORARY (GTA-Exp, remove after 2026-08-28): return (date, window_label)
+    if dt falls inside an active GTA-Exp capture window, else None. Windows
+    are half-open [start, end).
+    """
+    if not (GTA_EXP_START_DATE <= dt.date() <= GTA_EXP_END_DATE):
+        return None
+    t = dt.time()
+    for start, end, label in GTA_EXP_WINDOWS:
+        if start <= t < end:
+            return (dt.date(), label)
+    return None
+
+
+class GtaExpRecorder:
+    """
+    TEMPORARY (GTA-Exp, remove after 2026-08-28): manages one gate camera's
+    raw-footage capture window lifecycle — opens/writes/closes the AVI as
+    frames arrive, one instance per camera thread.
+
+    The filename includes `session_ts` (stamped once at construction, i.e.
+    once per consumer process start) so that a restart mid-window opens a
+    new file instead of truncating/overwriting the prior session's footage
+    for that same date+window.
+    """
+
+    def __init__(self, folder: str, log: logging.Logger):
+        self.folder = folder
+        self.log = log
+        self.session_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self._writer = None
+        self._current_window = None
+
+    def update(self, frame: np.ndarray, now: datetime) -> None:
+        """Call once per frame. Opens/writes/closes the AVI as needed."""
+        window = gta_exp_active_window(now)
+        if window is None:
+            self._close()
+            return
+        if self._writer is None or self._current_window != window:
+            self._close()
+            self._open(window)
+        self._writer.write(frame)
+
+    def _open(self, window: tuple[date, str]) -> None:
+        gta_date, gta_label = window
+        cam_dir = os.path.join(GTA_EXP_DIR, self.folder)
+        os.makedirs(cam_dir, exist_ok=True)
+        path = os.path.join(
+            cam_dir,
+            f"{self.folder}_{gta_date:%Y%m%d}_{gta_label}_{self.session_ts}.avi",
+        )
+        self._writer = cv2.VideoWriter(
+            path,
+            cv2.VideoWriter_fourcc(*'XVID'),
+            18.0,
+            (FRAME_W, FRAME_H),
+        )
+        self._current_window = window
+        self.log.info("[GTA-Exp] Recording window opened: %s", path)
+
+    def _close(self) -> None:
+        if self._writer is not None:
+            self._writer.release()
+            self._writer = None
+            self._current_window = None
+            self.log.info("[GTA-Exp] Recording window closed for %s", self.folder)
+
+
 def _get_daily_csv_path(static_path: str, headers: list) -> str:
     """
     Return a date-stamped CSV path for today derived from static_path.
@@ -988,18 +1082,19 @@ def run_animal_detection(
             ]), 'a', newline='') as f:
                 csv.writer(f).writerows(rows)
 
-        ts_tag   = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-        stem     = f"frame_{frame_index:08d}_{ts_tag}"
-
-        cv2.imwrite(
-            os.path.join(raw_frames_dir, f"{stem}_raw.jpg"),
-            frame,
-        )
-
-        cv2.imwrite(
-            os.path.join(ann_frames_dir, f"{stem}_ann.jpg"),
-            display,
-        )
+        # Storage overhaul: raw/annotated JPEG storage disabled — CSV-only output.
+        # ts_tag   = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        # stem     = f"frame_{frame_index:08d}_{ts_tag}"
+        #
+        # cv2.imwrite(
+        #     os.path.join(raw_frames_dir, f"{stem}_raw.jpg"),
+        #     frame,
+        # )
+        #
+        # cv2.imwrite(
+        #     os.path.join(ann_frames_dir, f"{stem}_ann.jpg"),
+        #     display,
+        # )
 
         bbox_csv_headers = [
             'frame_index', 'class_name', 'class_id', 'confidence',
@@ -1085,11 +1180,12 @@ def run_head_count(
                 cv2.rectangle(display, (hx1, hy1), (hx2, hy2), (255, 0, 255), 1)
 
     if head_count > 0:
-        ts_tag = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-        stem   = f"frame_{frame_index:08d}_{ts_tag}"
-
-        cv2.imwrite(os.path.join(raw_frames_dir, f"{stem}_raw.jpg"), frame)
-        cv2.imwrite(os.path.join(ann_frames_dir, f"{stem}_ann.jpg"), display)
+        # Storage overhaul: raw/annotated JPEG storage disabled — CSV-only output.
+        # ts_tag = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        # stem   = f"frame_{frame_index:08d}_{ts_tag}"
+        #
+        # cv2.imwrite(os.path.join(raw_frames_dir, f"{stem}_raw.jpg"), frame)
+        # cv2.imwrite(os.path.join(ann_frames_dir, f"{stem}_ann.jpg"), display)
 
         bbox_csv_headers = [
             'frame_index', 'confidence', 'x1', 'y1', 'x2', 'y2',
@@ -1338,11 +1434,12 @@ def run_entry_exit(
                     )
 
         if event in ('ENTRY', 'EXIT'):
-            ts_tag = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-            stem   = f"frame_{frame_index:08d}_{ts_tag}_{event}"
-
-            cv2.imwrite(os.path.join(raw_frames_dir, f"{stem}_raw.jpg"), frame)
-            cv2.imwrite(os.path.join(ann_frames_dir, f"{stem}_ann.jpg"), display)
+            # Storage overhaul: raw/annotated JPEG storage disabled — CSV-only output.
+            # ts_tag = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            # stem   = f"frame_{frame_index:08d}_{ts_tag}_{event}"
+            #
+            # cv2.imwrite(os.path.join(raw_frames_dir, f"{stem}_raw.jpg"), frame)
+            # cv2.imwrite(os.path.join(ann_frames_dir, f"{stem}_ann.jpg"), display)
 
             bbox_csv_headers = [
                 'frame_index', 'track_id', 'event',
@@ -1431,13 +1528,17 @@ def process_feed(cam_cfg: dict):
     run_HC     = cam_cfg['HC']
     run_EE     = cam_cfg['EE']
     cam_ip     = cam_cfg['ip']
-    # Stamped once at thread start — used in all AVI filenames for this session.
-    # Prevents part1.avi being overwritten when the process restarts.
-    session_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    # Storage overhaul: video storage disabled — session_ts was only used for
+    # AVI filenames, now unused (kept commented for context, not deleted).
+    # session_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     # Per-camera logger — all log lines tagged with topic name.
     log = logging.getLogger(topic)
     log.info("Thread starting — AN=%s HC=%s EE=%s", run_AN, run_HC, run_EE)
+
+    # TEMPORARY (GTA-Exp, remove after 2026-08-28): only constructed for the
+    # 4 gate cameras; None (and skipped every frame) for every other camera.
+    gta_recorder = GtaExpRecorder(folder, log) if folder in GTA_EXP_CAMERAS else None
 
     # ── Per-camera Kafka group identifiers (FIX-P2-2) ──────────────────────────
     # group_id: Each camera is an independent consumer group.
@@ -1464,9 +1565,10 @@ def process_feed(cam_cfg: dict):
             'bbox_csv'    : os.path.join(cam_root, pipeline, 'bbox_csv'),
         }
         os.makedirs(dirs[pipeline]['csv'],        exist_ok=True)
-        os.makedirs(dirs[pipeline]['inference'],  exist_ok=True)
-        os.makedirs(dirs[pipeline]['raw_frames'], exist_ok=True)
-        os.makedirs(dirs[pipeline]['ann_frames'], exist_ok=True)
+        # Storage overhaul: these dirs no longer created — video/image storage disabled.
+        # os.makedirs(dirs[pipeline]['inference'],  exist_ok=True)
+        # os.makedirs(dirs[pipeline]['raw_frames'], exist_ok=True)
+        # os.makedirs(dirs[pipeline]['ann_frames'], exist_ok=True)
         os.makedirs(dirs[pipeline]['bbox_csv'],   exist_ok=True)
 
     # ── Initialise AN CSV ─────────────────────────────────────────────────────
@@ -1629,15 +1731,16 @@ def process_feed(cam_cfg: dict):
             backoff = min(backoff * 2, 30)
 
     # ── Video writer setup ────────────────────────────────────────────────────
-    video_writer = None
-    frames_in_current_file = 0
-    file_part_number = 1
-
-    vid_pipeline = (
-        'head_count'       if run_HC else
-        'animal_detection' if run_AN else
-        'entry_exit'
-    )
+    # Storage overhaul: video storage disabled entirely — see consumers/README.md.
+    # video_writer = None
+    # frames_in_current_file = 0
+    # file_part_number = 1
+    #
+    # vid_pipeline = (
+    #     'head_count'       if run_HC else
+    #     'animal_detection' if run_AN else
+    #     'entry_exit'
+    # )
 
     frame_count   = 0
     frames_since_commit = 0   # tracks frames processed since last offset commit
@@ -1700,31 +1803,32 @@ def process_feed(cam_cfg: dict):
             frame   = cv2.resize(frame, (FRAME_W, FRAME_H))
             display = frame.copy()
 
-            # ── FIX-E2: VIDEO ROTATION LOGIC ──────────────────────────────────
-            if SAVE_VIDEO:
-                # If we hit the frame limit, safely close the file to prevent OpenDML corruption
-                if video_writer is not None and frames_in_current_file >= MAX_FRAMES_PER_AVI:
-                    video_writer.release()
-                    video_writer = None
-                    log.info("Rotated video to part %d for %s", file_part_number + 1, topic)
-                    file_part_number += 1
-                    frames_in_current_file = 0
+            # ── TEMPORARY: GTA-Exp raw footage capture (remove after 2026-08-28) ──
+            if gta_recorder is not None:
+                gta_recorder.update(frame, datetime.now())
 
-                # Open a new file if needed.
-                # session_ts is stamped once per process start so that a
-                # restart never overwrites a previous session's part1.avi.
-                if video_writer is None:
-                    vid_path = os.path.join(
-                        dirs[vid_pipeline]['inference'],
-                        f"{folder}_annotated_{session_ts}_part{file_part_number}.avi",
-                    )
-                    video_writer = cv2.VideoWriter(
-                        vid_path,
-                        cv2.VideoWriter_fourcc(*'XVID'),
-                        18.0,
-                        (FRAME_W, FRAME_H),
-                    )
-                    log.info("AVI writer opened: %s", vid_path)
+            # ── FIX-E2: VIDEO ROTATION LOGIC ──────────────────────────────────
+            # Storage overhaul: video storage disabled entirely.
+            # if SAVE_VIDEO:
+            #     if video_writer is not None and frames_in_current_file >= MAX_FRAMES_PER_AVI:
+            #         video_writer.release()
+            #         video_writer = None
+            #         log.info("Rotated video to part %d for %s", file_part_number + 1, topic)
+            #         file_part_number += 1
+            #         frames_in_current_file = 0
+            #
+            #     if video_writer is None:
+            #         vid_path = os.path.join(
+            #             dirs[vid_pipeline]['inference'],
+            #             f"{folder}_annotated_{session_ts}_part{file_part_number}.avi",
+            #         )
+            #         video_writer = cv2.VideoWriter(
+            #             vid_path,
+            #             cv2.VideoWriter_fourcc(*'XVID'),
+            #             18.0,
+            #             (FRAME_W, FRAME_H),
+            #         )
+            #         log.info("AVI writer opened: %s", vid_path)
 
             video_ts_sec = frame_count / 18.0
 
@@ -1781,9 +1885,10 @@ def process_feed(cam_cfg: dict):
             )
 
             # ── Write to AVI ──────────────────────────────────────────────────
-            if video_writer:
-                video_writer.write(display)
-                frames_in_current_file += 1
+            # Storage overhaul: video storage disabled entirely.
+            # if video_writer:
+            #     video_writer.write(display)
+            #     frames_in_current_file += 1
 
             # ── Publish to dashboard ──────────────────────────────────────────
             publish_frame(topic, display, ts_sec)
