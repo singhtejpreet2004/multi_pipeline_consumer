@@ -878,6 +878,61 @@ def gta_exp_active_window(dt: datetime) -> tuple[date, str] | None:
     return None
 
 
+class GtaExpRecorder:
+    """
+    TEMPORARY (GTA-Exp, remove after 2026-08-28): manages one gate camera's
+    raw-footage capture window lifecycle — opens/writes/closes the AVI as
+    frames arrive, one instance per camera thread.
+
+    The filename includes `session_ts` (stamped once at construction, i.e.
+    once per consumer process start) so that a restart mid-window opens a
+    new file instead of truncating/overwriting the prior session's footage
+    for that same date+window.
+    """
+
+    def __init__(self, folder: str, log: logging.Logger):
+        self.folder = folder
+        self.log = log
+        self.session_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self._writer = None
+        self._current_window = None
+
+    def update(self, frame: np.ndarray, now: datetime) -> None:
+        """Call once per frame. Opens/writes/closes the AVI as needed."""
+        window = gta_exp_active_window(now)
+        if window is None:
+            self._close()
+            return
+        if self._writer is None or self._current_window != window:
+            self._close()
+            self._open(window)
+        self._writer.write(frame)
+
+    def _open(self, window: tuple[date, str]) -> None:
+        gta_date, gta_label = window
+        cam_dir = os.path.join(GTA_EXP_DIR, self.folder)
+        os.makedirs(cam_dir, exist_ok=True)
+        path = os.path.join(
+            cam_dir,
+            f"{self.folder}_{gta_date:%Y%m%d}_{gta_label}_{self.session_ts}.avi",
+        )
+        self._writer = cv2.VideoWriter(
+            path,
+            cv2.VideoWriter_fourcc(*'XVID'),
+            18.0,
+            (FRAME_W, FRAME_H),
+        )
+        self._current_window = window
+        self.log.info("[GTA-Exp] Recording window opened: %s", path)
+
+    def _close(self) -> None:
+        if self._writer is not None:
+            self._writer.release()
+            self._writer = None
+            self._current_window = None
+            self.log.info("[GTA-Exp] Recording window closed for %s", self.folder)
+
+
 def _get_daily_csv_path(static_path: str, headers: list) -> str:
     """
     Return a date-stamped CSV path for today derived from static_path.
@@ -1477,14 +1532,13 @@ def process_feed(cam_cfg: dict):
     # AVI filenames, now unused (kept commented for context, not deleted).
     # session_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-    # TEMPORARY (GTA-Exp, remove after 2026-08-28): raw-footage capture state,
-    # only ever touched when folder is in GTA_EXP_CAMERAS.
-    gta_writer = None
-    gta_current_window = None
-
     # Per-camera logger — all log lines tagged with topic name.
     log = logging.getLogger(topic)
     log.info("Thread starting — AN=%s HC=%s EE=%s", run_AN, run_HC, run_EE)
+
+    # TEMPORARY (GTA-Exp, remove after 2026-08-28): only constructed for the
+    # 4 gate cameras; None (and skipped every frame) for every other camera.
+    gta_recorder = GtaExpRecorder(folder, log) if folder in GTA_EXP_CAMERAS else None
 
     # ── Per-camera Kafka group identifiers (FIX-P2-2) ──────────────────────────
     # group_id: Each camera is an independent consumer group.
@@ -1750,33 +1804,8 @@ def process_feed(cam_cfg: dict):
             display = frame.copy()
 
             # ── TEMPORARY: GTA-Exp raw footage capture (remove after 2026-08-28) ──
-            if folder in GTA_EXP_CAMERAS:
-                gta_window = gta_exp_active_window(datetime.now())
-                if gta_window is not None:
-                    if gta_writer is None or gta_current_window != gta_window:
-                        if gta_writer is not None:
-                            gta_writer.release()
-                        gta_cam_dir = os.path.join(GTA_EXP_DIR, folder)
-                        os.makedirs(gta_cam_dir, exist_ok=True)
-                        gta_date, gta_label = gta_window
-                        gta_path = os.path.join(
-                            gta_cam_dir,
-                            f"{folder}_{gta_date:%Y%m%d}_{gta_label}.avi",
-                        )
-                        gta_writer = cv2.VideoWriter(
-                            gta_path,
-                            cv2.VideoWriter_fourcc(*'XVID'),
-                            18.0,
-                            (FRAME_W, FRAME_H),
-                        )
-                        gta_current_window = gta_window
-                        log.info("[GTA-Exp] Recording window opened: %s", gta_path)
-                    gta_writer.write(frame)
-                elif gta_writer is not None:
-                    gta_writer.release()
-                    gta_writer = None
-                    gta_current_window = None
-                    log.info("[GTA-Exp] Recording window closed for %s", topic)
+            if gta_recorder is not None:
+                gta_recorder.update(frame, datetime.now())
 
             # ── FIX-E2: VIDEO ROTATION LOGIC ──────────────────────────────────
             # Storage overhaul: video storage disabled entirely.

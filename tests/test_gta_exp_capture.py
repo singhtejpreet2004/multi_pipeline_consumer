@@ -3,11 +3,16 @@ Tests for the TEMPORARY GTA-Exp raw-footage capture feature (remove after
 2026-08-28 — see consumers/README.md's GTA-Exp section).
 
 gta_exp_active_window() is a pure function of a datetime and the module-level
-constants, so these tests need no mocking beyond the standard import-guard
-used across this suite.
+constants, so those tests need no mocking beyond the standard import-guard
+used across this suite. GtaExpRecorder's writer lifecycle (open/write/close)
+is tested with cv2.VideoWriter mocked out and GTA_EXP_DIR pointed at a tmp
+directory, so no real video files or /data paths are touched.
 """
+import logging
 from datetime import datetime
+from unittest.mock import patch, MagicMock
 
+import numpy as np
 import pytest
 
 
@@ -81,3 +86,135 @@ def test_gta_exp_active_window(dt, expect_active, expect_label):
         result_date, result_label = result
         assert result_date == dt.date()
         assert result_label == expect_label
+
+
+def _import_recorder():
+    from consumers.consumer import GtaExpRecorder
+    return GtaExpRecorder
+
+
+def _make_frame():
+    return np.zeros((360, 640, 3), dtype=np.uint8)
+
+
+def test_recorder_does_not_open_writer_outside_any_window(tmp_path):
+    try:
+        GtaExpRecorder = _import_recorder()
+        import consumers.consumer as consumer_module
+    except ImportError as e:
+        pytest.skip(f"Skipping test due to import error: {e}")
+        return
+
+    with patch.object(consumer_module, "GTA_EXP_DIR", str(tmp_path)), \
+         patch("consumers.consumer.cv2.VideoWriter") as mock_video_writer:
+        recorder = GtaExpRecorder("gate_1_main_entry", logging.getLogger("test"))
+        recorder.update(_make_frame(), datetime(2026, 8, 22, 12, 0))  # between windows
+
+        assert not mock_video_writer.called
+
+
+def test_recorder_opens_once_and_writes_every_frame_in_same_window(tmp_path):
+    try:
+        GtaExpRecorder = _import_recorder()
+        import consumers.consumer as consumer_module
+    except ImportError as e:
+        pytest.skip(f"Skipping test due to import error: {e}")
+        return
+
+    with patch.object(consumer_module, "GTA_EXP_DIR", str(tmp_path)), \
+         patch("consumers.consumer.cv2.VideoWriter") as mock_video_writer:
+        mock_video_writer.side_effect = lambda *a, **kw: MagicMock()
+        recorder = GtaExpRecorder("gate_1_main_entry", logging.getLogger("test"))
+        frame = _make_frame()
+
+        recorder.update(frame, datetime(2026, 8, 22, 9, 5))
+        recorder.update(frame, datetime(2026, 8, 22, 9, 10))
+        recorder.update(frame, datetime(2026, 8, 22, 9, 15))
+
+        assert mock_video_writer.call_count == 1, "must not reopen the writer within the same window"
+        path_arg = mock_video_writer.call_args[0][0]
+        assert "gate_1_main_entry_20260822_0900-1000" in path_arg
+        assert recorder.session_ts in path_arg, "filename must include the session timestamp"
+
+        writer_instance = recorder._writer
+        assert writer_instance.write.call_count == 3, "must write every frame while the window is active"
+
+
+def test_recorder_switches_writer_when_window_changes(tmp_path):
+    try:
+        GtaExpRecorder = _import_recorder()
+        import consumers.consumer as consumer_module
+    except ImportError as e:
+        pytest.skip(f"Skipping test due to import error: {e}")
+        return
+
+    with patch.object(consumer_module, "GTA_EXP_DIR", str(tmp_path)), \
+         patch("consumers.consumer.cv2.VideoWriter") as mock_video_writer:
+        mock_video_writer.side_effect = lambda *a, **kw: MagicMock()
+        recorder = GtaExpRecorder("gate_1_main_entry", logging.getLogger("test"))
+        frame = _make_frame()
+
+        recorder.update(frame, datetime(2026, 8, 22, 9, 30))  # window 1
+        first_writer = recorder._writer
+
+        recorder.update(frame, datetime(2026, 8, 22, 14, 45))  # window 2
+        second_writer = recorder._writer
+
+        assert mock_video_writer.call_count == 2, "a new window must open a new writer"
+        assert first_writer.release.called, "the previous window's writer must be released"
+        assert second_writer is not first_writer
+
+
+def test_recorder_closes_writer_when_leaving_all_windows(tmp_path):
+    try:
+        GtaExpRecorder = _import_recorder()
+        import consumers.consumer as consumer_module
+    except ImportError as e:
+        pytest.skip(f"Skipping test due to import error: {e}")
+        return
+
+    with patch.object(consumer_module, "GTA_EXP_DIR", str(tmp_path)), \
+         patch("consumers.consumer.cv2.VideoWriter") as mock_video_writer:
+        mock_video_writer.side_effect = lambda *a, **kw: MagicMock()
+        recorder = GtaExpRecorder("gate_1_main_entry", logging.getLogger("test"))
+        frame = _make_frame()
+
+        recorder.update(frame, datetime(2026, 8, 22, 9, 30))  # window active
+        writer_instance = recorder._writer
+
+        recorder.update(frame, datetime(2026, 8, 22, 12, 0))  # now between windows
+
+        assert writer_instance.release.called
+        assert recorder._writer is None
+        assert recorder._current_window is None
+
+
+def test_recorder_restart_gets_a_distinct_filename(tmp_path):
+    """
+    Regression test: a consumer restart mid-window must not overwrite the
+    prior session's file for the same camera/date/window — each recorder
+    instance stamps its own session_ts once at construction.
+    """
+    try:
+        GtaExpRecorder = _import_recorder()
+        import consumers.consumer as consumer_module
+    except ImportError as e:
+        pytest.skip(f"Skipping test due to import error: {e}")
+        return
+
+    with patch.object(consumer_module, "GTA_EXP_DIR", str(tmp_path)), \
+         patch("consumers.consumer.cv2.VideoWriter") as mock_video_writer:
+        mock_video_writer.side_effect = lambda *a, **kw: MagicMock()
+        frame = _make_frame()
+
+        recorder1 = GtaExpRecorder("gate_1_main_entry", logging.getLogger("test"))
+        recorder1.update(frame, datetime(2026, 8, 22, 9, 5))
+        path1 = mock_video_writer.call_args[0][0]
+
+        # Simulate a process restart mid-window: a brand new recorder instance.
+        recorder2 = GtaExpRecorder("gate_1_main_entry", logging.getLogger("test"))
+        recorder2.session_ts = recorder1.session_ts + "_1"  # force a distinct stamp deterministically
+        recorder2.update(frame, datetime(2026, 8, 22, 9, 6))
+        path2 = mock_video_writer.call_args[0][0]
+
+        assert path1 != path2, "a restart mid-window must not reuse the same filename"

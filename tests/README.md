@@ -11,7 +11,7 @@ run without GPU/CUDA hardware.
 |---|---|
 | `conftest.py` | Not a test — stubs `generate_detections` and `deep_sort` (normally loaded from `/data/Entry_Exit` on the GPU server) via `sys.modules`, so `consumers.consumer` can be imported anywhere |
 | `test_frame_saving.py` | Verifies `run_animal_detection`/`run_head_count`/`run_entry_exit` do **not** write raw/annotated JPEGs (video/image storage is disabled — CSV-only output), while CSV and bbox CSV writes still happen correctly; plus a static guard against the disabled general video/image writer calls reappearing in `consumer.py` |
-| `test_gta_exp_capture.py` | ⚠️ **TEMPORARY** (remove after 2026-08-28) — unit tests for `gta_exp_active_window()`, the pure date/time gate behind the GTA-Exp raw-footage capture experiment |
+| `test_gta_exp_capture.py` | ⚠️ **TEMPORARY** (remove after 2026-08-28) — unit tests for `gta_exp_active_window()` (the pure date/time gate) and `GtaExpRecorder` (the writer lifecycle) behind the GTA-Exp raw-footage capture experiment |
 | `README.md` | This file |
 
 ---
@@ -26,7 +26,7 @@ flowchart LR
     MOCK --> RUN["run_animal_detection() / run_head_count() /\nrun_entry_exit()\n(mocked YOLO model + tracker)"]
     RUN --> ASSERT["assertions:\ncv2.imwrite never called\nraw_frames/annotated_frames stay empty\nCSV + bbox CSV rows still written"]
     PYTEST --> STATIC["test_no_active_video_or_image_writer_code\n(source scan, no import needed)"]
-    PYTEST --> GTAEXP["test_gta_exp_capture.py\n(TEMPORARY, remove after 2026-08-28)\ngta_exp_active_window() boundary cases"]
+    PYTEST --> GTAEXP["test_gta_exp_capture.py\n(TEMPORARY, remove after 2026-08-28)\nwindow boundary cases + GtaExpRecorder\nopen/write/close/restart lifecycle\n(cv2.VideoWriter mocked)"]
 ```
 
 ---
@@ -101,10 +101,16 @@ file along with the rest of the GTA-Exp code after 2026-08-28.
 |---|---|
 | `test_gta_exp_cameras_are_exactly_the_four_gate_cameras` | `GTA_EXP_CAMERAS` contains exactly `gate_1_outside_left`, `gate_1_main_entry`, `gate_2_entry_camera`, `gate_2_exit_camera` — guards against a typo silently excluding (or including) a camera |
 | `test_gta_exp_active_window` (parametrized) | `gta_exp_active_window(dt)` returns `None` before `2026-08-22`, after `2026-08-28`, and between windows on a valid day; returns `(date, label)` at each of the 3 daily windows' start boundary (inclusive) and mid-window; returns `None` at each window's end boundary (exclusive, half-open `[start, end)`) |
+| `test_recorder_does_not_open_writer_outside_any_window` | `GtaExpRecorder.update()` never constructs a `cv2.VideoWriter` when called with a datetime outside any active window |
+| `test_recorder_opens_once_and_writes_every_frame_in_same_window` | Three `update()` calls within the same window construct exactly one `cv2.VideoWriter` (not one per frame), write all 3 frames to it, and the resulting filename contains the camera/date/window label plus `session_ts` |
+| `test_recorder_switches_writer_when_window_changes` | Calling `update()` in window 1 then window 2 releases the first writer and opens a distinct second one |
+| `test_recorder_closes_writer_when_leaving_all_windows` | Calling `update()` inside a window then outside any window releases the writer and resets internal state to `None` |
+| `test_recorder_restart_gets_a_distinct_filename` | **Regression test** for a real bug found during review: two separate `GtaExpRecorder` instances (simulating a consumer restart mid-window) produce different filenames for the same camera/date/window, because each stamps its own `session_ts` at construction — so a restart can no longer silently overwrite the prior session's footage |
 
-No mocking needed beyond the standard import-guard — `gta_exp_active_window()` is a pure function
-of a `datetime` and the module-level `GTA_EXP_*` constants, so tests construct `datetime` objects
-directly rather than patching `datetime.now()`.
+The `gta_exp_active_window` tests need no mocking beyond the standard import-guard — it's a pure
+function of a `datetime` and the module-level `GTA_EXP_*` constants. The `GtaExpRecorder` tests
+patch `consumers.consumer.cv2.VideoWriter` (so no real video files are written) and point
+`GTA_EXP_DIR` at a pytest `tmp_path` (so no real `/data/...` paths are touched or created).
 
 ### `conftest.py`
 
