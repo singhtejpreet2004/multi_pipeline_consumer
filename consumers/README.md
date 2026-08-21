@@ -190,6 +190,32 @@ Tuned for L40S 48GB VRAM. PyTorch and TF run in isolated lanes to avoid cross-fr
   summary CSV). See [`../docs/others/Frame_saving_documentation/Frame_Saving_Handover.md`](../docs/others/Frame_saving_documentation/Frame_Saving_Handover.md)
   for the original frame-saving handover doc (historical — describes the now-disabled behavior).
 
+---
+
+## ⚠️ TEMPORARY — GTA-Exp raw footage capture (remove after 2026-08-28)
+
+This is a short-lived experiment layered on top of the permanent storage overhaul above — it
+does **not** change AN/HC/EE pipeline behavior or the CSV-only output described in "Output
+layout". It exists to collect ground-truth footage for model verification and should be deleted
+once that's done.
+
+| Item | Value |
+|---|---|
+| Scope | Exactly 4 cameras: `gate_1_outside_left`, `gate_1_main_entry`, `gate_2_entry_camera`, `gate_2_exit_camera` (`GTA_EXP_CAMERAS`) — no other camera is touched |
+| Active dates | `2026-08-22` through `2026-08-28` inclusive (`GTA_EXP_START_DATE`/`GTA_EXP_END_DATE`) — hard cutoff in code, not just a manual stop |
+| Daily windows | `09:00–10:00`, `14:30–15:30`, `19:00–20:00`, server local time, half-open `[start, end)` (`GTA_EXP_WINDOWS`) |
+| Output location | `/data/multi_pipeline_consumer/output/GTA-Exp/<camera_folder>/<camera_folder>_<YYYYMMDD>_<window>.avi` |
+| Format | Raw, unannotated footage — writes the pre-pipeline `frame` buffer, not the boxes/text-annotated `display` buffer. XVID codec, 18.0 FPS, 640×360 (same convention as the removed general video writer) |
+| Gating function | `gta_exp_active_window(dt)` in `consumer.py` — pure function of a datetime + the constants above, unit-tested in `tests/test_gta_exp_capture.py` |
+| Call site | `process_feed()`'s per-frame loop, right after frame decode/resize, before the (disabled) general AVI rotation block |
+| Interaction with AN/HC/EE | None — the 4 gate cameras' existing pipelines (all `AN`/`HC`/`EE` = `True` per `CAMERA_REGISTRY`) keep running completely unchanged; this only adds a second, independent raw-video write |
+
+**Follow-up required:** after 2026-08-28, delete the `GTA_EXP_*` constants, `gta_exp_active_window()`,
+the call site in `process_feed()`, the `gta_writer`/`gta_current_window` state variables,
+`tests/test_gta_exp_capture.py`, and this section — via a `hotfix/consumer/remove-gta-exp-capture`
+(or `chore/`) branch. The hard date cutoff makes this safe to do at any point after the 28th
+without losing any in-progress capture.
+
 ### Dashboard
 
 | Item | Value |
